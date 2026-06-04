@@ -5,17 +5,10 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-# Pull in the MI1602 driver from the sibling folder if it exists.
-# The user develops it in `../../MI1602 Dev/components/mi1602/` so it can
-# have its own git history; we just consume it via EXTRA_COMPONENT_DIRS.
-# Note: spaces in path are fine; CMake handles them in a list context.
-set(MI1602_COMPONENT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../MI1602 Dev/components")
-if(EXISTS "${MI1602_COMPONENT_DIR}/mi1602")
-    list(APPEND EXTRA_COMPONENT_DIRS "${MI1602_COMPONENT_DIR}")
-    message(STATUS "MI1602 driver found at ${MI1602_COMPONENT_DIR}/mi1602")
-else()
-    message(STATUS "MI1602 driver not present (expected at ${MI1602_COMPONENT_DIR}/mi1602) — build continues without it.")
-endif()
+# The MI1602 thermal-camera driver is vendored in-tree at components/mi1602/
+# (moved here June 2026 from the old sibling "MI1602 Dev/" folder so a fresh
+# clone of this repo builds standalone). ESP-IDF auto-discovers components/,
+# so no EXTRA_COMPONENT_DIRS is needed.
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(cubesat_imager)

@@ -44,6 +44,7 @@ firmware/
     └── sstv_robot36/       # SSTV encoder          (stub — phase 4)
 ```
 
-The MI1602 thermal-camera driver is developed **as a separate project** at
-`../../MI1602 Dev/components/mi1602/`. The top-level CMakeLists picks it
-up automatically via `EXTRA_COMPONENT_DIRS` once it exists.
+The MI1602 thermal-camera driver is vendored in-tree at
+`components/mi1602/` (moved here June 2026 from the old `../../MI1602 Dev/`
+sibling so a fresh clone builds standalone). ESP-IDF auto-discovers
+`components/`, so no `EXTRA_COMPONENT_DIRS` is needed.

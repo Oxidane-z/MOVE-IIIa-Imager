@@ -340,9 +340,9 @@ ceiling. **Don't capture and SSTV simultaneously**; serialize.
     Waveshare 31647 as secondary
 12. **OV5647 (RPi Camera v1.3)** — bridge sensor for early CSI/ISP/JPEG
     pipeline development while the SC850SL 30-pin adapter is being designed
-13. **MI1602 driver lives in `../MI1602 Dev/components/mi1602/`** —
-    sibling-folder pattern; firmware CMakeLists auto-picks it up via
-    `EXTRA_COMPONENT_DIRS` when present
+13. **MI1602 driver is vendored in-tree at `firmware/components/mi1602/`** —
+    moved June 2026 from the old `../MI1602 Dev/` sibling so a clone builds
+    standalone; ESP-IDF auto-discovers `components/` (see §10)
 14. **Project memory file (this one) is authoritative** —
     `PROJECT_MEMORY.md` is the single resume-point doc; auxiliary docs
     (BREAKTHROUGH_2LANE.md, FINAL_INVENTORY.md, etc.) are historical
@@ -856,8 +856,8 @@ DELETED (no longer needed — extraction complete):
 
 ### Phase 4 (parallel track): MI1602 thermal driver
 
-Developed standalone in sibling folder `../MI1602 Dev/components/mi1602/`.
-The firmware CMakeLists picks it up via EXTRA_COMPONENT_DIRS automatically.
+Developed standalone, now vendored in-tree at `firmware/components/mi1602/`
+(June 2026; auto-discovered, no EXTRA_COMPONENT_DIRS — see §10).
 
 - [ ] SPI master setup (3 MHz SYSCLK gen via LEDC or clock-output, RSTN handling)
 - [ ] Frame capture loop in radiometric (16-bit/pixel) mode
@@ -949,7 +949,7 @@ The firmware CMakeLists picks it up via EXTRA_COMPONENT_DIRS automatically.
     pyserial's `setRTS()` toggle does not reboot the chip. To force a
     fresh boot log capture, use `python -m esptool --before usb-reset
     --after hard-reset chip-id` then immediately open the serial port.
-    There's a helper `firmware/capture_serial.py` for this.
+    There's a helper `firmware/tools/capture_serial.py` for this.
 
 17. **Firmware logs only at boot**, then enters silent heartbeat. If you
     open the serial port mid-loop, you see nothing. This is by design
@@ -1335,6 +1335,50 @@ Next, in rough priority:
 3. HW ISP via 2×2 binning (real CCM/AWB/gamma) once the binning table is
    recovered.
 4. MI48 background streaming task → higher RGB fps.
+
+---
+
+## 10. Repo reorganization + MI1602 vendored in-tree (2026-06)
+
+The project root was a dumping ground (datasheets, `.deb` unpacks, rootfs
+extraction, scratch scripts all mixed with source). Cleaned up and put under
+version control.
+
+**git + GitHub.** `SC850SL Dev/` is now a git repo, pushed to
+<https://github.com/Oxidane-z/MOVE-IIIa-Imager> (public). The first commit is
+the pre-cleanup working snapshot, so every later move is diffable/revertible.
+
+**New top-level layout** (`SC850SL Dev/`):
+- `firmware/` — the build (internals unchanged)
+- `docs/` — R&D notes (BREAKTHROUGH_2LANE, FINAL_INVENTORY, M5STACK_CONFIG,
+  TAB5_FINDINGS, TWO_LANE_DERIVATION)
+- `reference/` — vendor driver + register-table *source copies* (the build
+  uses the copies under `firmware/components/sc850sl/init_tables/`), extracted
+  datasheet text, SSTV test-image source
+- `datasheets/` — PDFs (gitignored)
+- `_archive/` — bulky scratch: `*.deb`, `m5_research/`, `rootfs_files/`, the
+  old `tools/rnd/` scripts, duplicate `_*_stamp.bat` (gitignored)
+- root keeps only `CLAUDE.md`, `PROJECT_MEMORY.md`, `LICENSE`
+- `firmware/`: `capture_serial.py` + `serial_tail.py` moved into
+  `firmware/tools/` (alongside `usb_preview.py`); `_reset_capture.bat` updated
+  to call `tools/capture_serial.py`.
+
+**MI1602 driver vendored in-tree.** It used to be a sibling folder pulled via
+`EXTRA_COMPONENT_DIRS`; it now lives at `firmware/components/mi1602/` (ESP-IDF
+auto-discovers `components/`), so a fresh clone builds without the sibling.
+`firmware/CMakeLists.txt` no longer sets `EXTRA_COMPONENT_DIRS`. The old
+`MI1602 Dev/` sibling now holds only datasheets/reference + the standalone
+`test/` app (its CMakeLists repointed to the new component path). `MI1602 Dev/`
+itself is NOT under git — track it separately or as a submodule if ever needed.
+
+> **git submodule (concept, for the record):** a submodule nests one git repo
+> inside another *by reference* — the parent stores only the child's URL plus a
+> pinned commit SHA, not the child's files. It fits when the child is a
+> separately versioned library shared across multiple projects. We chose plain
+> **vendoring** (copying the driver into this repo) instead, because the MI1602
+> driver is single-purpose and edited in lockstep with this firmware; a
+> submodule would add `git submodule update --init` ceremony to every clone for
+> no real benefit here.
 
 ---
 

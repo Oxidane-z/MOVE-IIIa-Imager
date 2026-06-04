@@ -1,0 +1,93 @@
+menu "MI1602 Thermal Camera"
+
+    comment "Defaults avoid pins already used by the SC850SL driver:"
+    comment "  I²C0 SDA/SCL = 8/9, XSHUTDN = 10, EXTCLK = 11, Heartbeat LED = 14."
+
+    # -----------------------------------------------------------------
+    # I²C (control / status registers)
+    # -----------------------------------------------------------------
+    config MI1602_I2C_SDA_GPIO
+        int "I²C SDA GPIO"
+        default 18
+        help
+            SDA pin for the I²C bus that talks to the MI48's register
+            file. The driver uses an existing master bus owned by the
+            application — this Kconfig only controls the default the
+            test app passes in.
+
+    config MI1602_I2C_SCL_GPIO
+        int "I²C SCL GPIO"
+        default 19
+
+    config MI1602_I2C_FREQ_HZ
+        int "I²C bus frequency (Hz)"
+        default 100000
+        range 50000 400000
+
+    config MI1602_I2C_ADDR
+        hex "MI48 7-bit I²C address"
+        default 0x40
+        help
+            0x40 or 0x41 depending on how the ADDR strap of the MI48 is tied.
+
+    # -----------------------------------------------------------------
+    # SPI (frame data)
+    # -----------------------------------------------------------------
+    config MI1602_SPI_HOST
+        int "SPI host (1=SPI2_HOST, 2=SPI3_HOST)"
+        default 1
+        range 1 2
+
+    config MI1602_SPI_SCLK_GPIO
+        int "SPI SCLK GPIO"
+        default 20
+
+    config MI1602_SPI_MISO_GPIO
+        int "SPI MISO GPIO (from MI48 → ESP32)"
+        default 21
+
+    config MI1602_SPI_MOSI_GPIO
+        int "SPI MOSI GPIO (dummy bytes from ESP32 → MI48)"
+        default 22
+
+    config MI1602_SPI_CS_GPIO
+        int "SPI CS_N GPIO (manual GPIO, NOT a SPI peripheral CS)"
+        default 23
+        help
+            MI48 requires CS to remain asserted across the entire frame
+            transfer. The ESP-IDF SPI driver toggles its hardware CS per
+            transaction, so the driver controls CS_N directly via this GPIO.
+
+    config MI1602_SPI_FREQ_HZ
+        int "SPI clock frequency (Hz)"
+        default 15600000
+        help
+            7800000 / 15600000 / 31200000. pysenxor default is 31.2 MHz.
+            Start low for bring-up; raise after frames decode cleanly.
+
+    # -----------------------------------------------------------------
+    # Control GPIOs
+    # -----------------------------------------------------------------
+    config MI1602_RESET_N_GPIO
+        int "RESET_N GPIO (active low; -1 to disable)"
+        default 24
+        help
+            Active-low pulse: 50 µs assert, 50 ms deassert wait.
+
+    config MI1602_DATA_READY_GPIO
+        int "DATA_READY GPIO (input; -1 to disable and use STATUS polling)"
+        default 25
+
+    config MI1602_SYSCLK_GPIO
+        int "Optional SYSCLK output GPIO (LEDC) — -1 if module has its own clock"
+        default -1
+        help
+            Some MI1602 modules need an external clock on SYSCLK.
+            Most carrier boards bring their own crystal, in which case
+            leave this at -1.
+
+    config MI1602_SYSCLK_HZ
+        int "SYSCLK frequency (Hz)"
+        default 3000000
+
+endmenu

@@ -1,9 +1,15 @@
 # Integrating the MI1602 driver
 
-The MI1602 thermal-camera driver is developed as a **separate project** at
-`C:\Users\zeyu.zhu\Pictures\MI1602 Dev\`. The top-level CMakeLists here
-automatically picks it up via `EXTRA_COMPONENT_DIRS` the moment that path
-exists. Nothing else to do — no symlinks, no copies, no submodules.
+> **SUPERSEDED (June 2026).** The MI1602 driver is now vendored **in-tree** at
+> `firmware/components/mi1602/`, so there is no special integration step —
+> ESP-IDF auto-discovers `components/`. The sibling-folder +
+> `EXTRA_COMPONENT_DIRS` scheme described below is kept only as historical
+> context for why the code originally lived in a separate folder.
+
+The MI1602 thermal-camera driver was originally developed as a **separate
+project** at `C:\Users\zeyu.zhu\Pictures\MI1602 Dev\`, and the top-level
+CMakeLists picked it up via `EXTRA_COMPONENT_DIRS`. That is no longer how the
+build works (see the note above).
 
 ## Expected layout in the sibling folder
 

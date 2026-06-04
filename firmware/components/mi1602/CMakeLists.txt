@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS
+        "mi1602.c"
+        "mi1602_spi.c"
+        "mi1602_crc.c"
+        "mi1602_post.c"
+        "mi1602_filters_stub.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "private"
+    REQUIRES
+        driver
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_spi
+        esp_driver_ledc
+        esp_timer
+        freertos
+)

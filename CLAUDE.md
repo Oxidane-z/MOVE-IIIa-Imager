@@ -29,9 +29,11 @@ Robot36 SSTV encoder and decoder are both written in-tree:
 - TX: `firmware/components/sstv_robot36/`
 - RX: inlined in `firmware/main/app_sc202cs_tab5.c`
 
-The MI1602 thermal camera driver lives in a sibling folder
-(`../MI1602 Dev/components/mi1602/`) and is pulled in via
-`EXTRA_COMPONENT_DIRS` from the firmware's top-level `CMakeLists.txt`.
+The MI1602 thermal camera driver is vendored in-tree at
+`firmware/components/mi1602/` (moved here June 2026 from the old
+`../MI1602 Dev/` sibling so a fresh clone builds standalone; ESP-IDF
+auto-discovers `components/`). The old sibling folder now holds only
+datasheets/reference material and a standalone test app.
 
 ## Where to look first
 
