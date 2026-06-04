@@ -6,4 +6,4 @@ cd /d "C:\Users\zeyu.zhu\Pictures\SC850SL Dev\firmware"
 echo === RESETTING ===
 python -m esptool --chip esp32p4 -p COM16 --before usb-reset --after hard-reset chip-id
 echo === CAPTURING ===
-python capture_serial.py COM16 14
+python tools\capture_serial.py COM16 14
