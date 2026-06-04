@@ -2,10 +2,11 @@
 
 160 × 120 16-bit (deci-Kelvin) thermal sensor on **ESP32-P4**, ESP-IDF v6.0+.
 
-The driver is a port of the Python `pysenxor 1.6.7` module
-(`pysenxor-1.6.7/senxor/`), keeping the same register usage, bootup
-flow, frame layout and CRC convention. The C++ `libsenxor_samples`
-package was used as a secondary reference for SPI behaviour.
+The driver is a port of Meridian Innovation's **official `pysenxor 1.6.7`
+SDK** (`pysenxor-1.6.7/senxor/`), keeping the same register usage, bootup
+flow, frame layout and CRC convention. Meridian's C++ `libsenxor_samples`
+package was used as a secondary reference for SPI behaviour. Refer to those
+upstream projects for their original licensing terms.
 
 ## Transport
 
