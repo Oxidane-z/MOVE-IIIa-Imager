@@ -1,0 +1,177 @@
+# Project-wide ESP-IDF defaults for the CubeSat imaging payload.
+# Any settings here become the baseline; `idf.py menuconfig` can override
+# them locally (writes to `sdkconfig`, which is gitignored).
+#
+# IMPORTANT: changing any of these requires a clean rebuild
+# (`idf.py fullclean && idf.py build`).
+
+# ---- Target ----------------------------------------------------------------
+CONFIG_IDF_TARGET="esp32p4"
+# ESP-IDF v6.0 defaults to ESP32-P4 silicon rev v3.0. The Olimex/Waveshare
+# early-batch boards are rev v1.0, so we enable the wider-compat min-rev.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+
+# ---- Camera target choice --------------------------------------------------
+# Active bring-up target: SC850SL on the Stamp-P4 (flight hardware path).
+# Flip to CAMERA_TARGET_SC202CS_TAB5 only when iterating on the Tab5 demo.
+#
+# Note: the Tab5 onboard sensor is SC202CS (PID readback 0xeb52); early
+# M5Stack docs / sample code mislabel it as SC2336.
+CONFIG_CAMERA_TARGET_SC850SL=y
+# CONFIG_CAMERA_TARGET_SC202CS_TAB5 is not set
+
+# ---- SC850SL pinout (Stamp-P4 wiring) --------------------------------------
+# User's carrier wires LP_GPIO11 → SDA, LP_GPIO9 → SCL (LP and HP GPIOs
+# share physical pins, so we use 11 / 9 in the IDF API). Internal pull-ups
+# stay disabled — the sensor's I/O is 1.8 V and the carrier has external
+# pull-ups to DOVDD.
+#
+# The carrier provides its own 24 MHz crystal to the sensor, so we DISABLE
+# the LEDC-driven EXTCLK on the MCU side (was GPIO 11 — would now conflict
+# with SDA). Setting the pin to -1 makes the driver skip LEDC init.
+CONFIG_SC850SL_I2C_SDA_GPIO=11
+CONFIG_SC850SL_I2C_SCL_GPIO=9
+# Carrier wiring:
+#   GPIO 54 → SC850SL XSHUTDN (active-low reset). Was on the Kconfig
+#       default of GPIO 10, so the sensor was never actually released
+#       from reset (GPIO 54 floats high-Z by default) and the I²C
+#       slave logic stayed dormant.
+#   GPIO 53 → SC850SL XVCLK, paralleled with the carrier's 24 MHz
+#       crystal. We leave EXTCLK disabled so GPIO 53 stays high-Z and
+#       the crystal drives the sensor unimpeded.
+CONFIG_SC850SL_XSHUTDN_GPIO=54
+CONFIG_SC850SL_EXTCLK_GPIO=-1
+# I²C clock 100 kHz. The earlier 50 kHz setting was intended to be
+# extra-conservative during bring-up, but in practice the IDF master
+# driver has been MORE reliable at 100 kHz on this carrier — at 50 kHz
+# we see intermittent NACKs during the 191-entry init table walk. The
+# higher rate also reduces the wall-clock cost of register settling
+# windows being hit mid-byte.
+CONFIG_SC850SL_I2C_FREQ_HZ=100000
+
+# MI1602 thermal camera — ENABLED. Carrier reworked (2026-06) so the
+# MI1602 pins no longer collide with the SC850SL (which owns GPIO 9/11/54)
+# or PCM5102A (20-23). Current wiring:
+#   I²C (port 1): SDA = GPIO 12, SCL = GPIO 15
+#   MODE strap  : GPIO 10  (driven in mi1602_probe.c — board glue)
+#   DataReady   : GPIO 8   (active-high frame-ready input)
+#   SPI         : SCLK 28 / MISO 29 / MOSI 30 / CS 31  (SPI2_HOST)
+# I²C is on port 1 so it's fully independent of the SC850SL's port-0 bus.
+CONFIG_MI1602_ENABLED=y
+CONFIG_MI1602_I2C_PORT=1
+CONFIG_MI1602_I2C_SDA_GPIO=12
+CONFIG_MI1602_I2C_SCL_GPIO=15
+CONFIG_MI1602_I2C_FREQ_HZ=100000
+# Module's ADDR strap is HIGH → I²C address 0x41 (bus scan confirms a
+# device at 0x41, not the 0x40 default).
+CONFIG_MI1602_I2C_ADDR_HIGH=y
+CONFIG_MI1602_SPI_HOST=2
+CONFIG_MI1602_SPI_FREQ_HZ=15600000
+CONFIG_MI1602_SPI_SCLK_GPIO=28
+CONFIG_MI1602_SPI_MISO_GPIO=29
+CONFIG_MI1602_SPI_MOSI_GPIO=30
+CONFIG_MI1602_SPI_CS_GPIO=31
+CONFIG_MI1602_RESET_GPIO=-1
+CONFIG_MI1602_DATA_READY_GPIO=8
+CONFIG_MI1602_SYSCLK_GPIO=-1
+
+# ---- CPU & FreeRTOS --------------------------------------------------------
+# P4 main CPU at 360 MHz (top speed). Use the LP core for housekeeping later.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_FREERTOS_HZ=1000
+# CONFIG_FREERTOS_USE_TICKLESS_IDLE and CONFIG_PM_ENABLE are disabled —
+# dynamic CPU clock scaling trips LEDC auto-clock calc on P4 and faults
+# the Tab5 backlight PWM init. We can re-enable for the flight Stamp-P4
+# target later via menuconfig, but the Tab5 BSP doesn't tolerate PM.
+# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set
+# CONFIG_PM_ENABLE is not set
+
+# ---- PSRAM (Stamp-P4 has 32 MB octal — P4's symbol is "HEX" naming-wise) --
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# ---- Flash (Stamp-P4 has 16 MB) -------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ---- Partition table (custom, defined in partitions.csv) ------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# IDF v6.0 bootloader is ~0x6030 bytes — too big for the legacy 0x8000 offset.
+# Move partition table to 0x10000, giving the bootloader 60 KB of room.
+CONFIG_PARTITION_TABLE_OFFSET=0x10000
+# Optimize bootloader for size (default already, but be explicit):
+CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
+
+# ---- Compiler --------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+# IDF v6.0 promoted several warnings to errors. Some third-party
+# managed components (esp_io_expander v1.2.1, etc.) still emit
+# -Wdiscarded-qualifiers. Downgrade to warnings until they're patched.
+# (IDF release notes call this option transitional; will be removed
+# in a future IDF — we'll revisit then.)
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
+
+# ---- LVGL fonts (used by app_sc202cs_tab5.c UI) ----------------------------
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+
+# ---- Camera sensor driver: SC202CS (Tab5 onboard cam) ----------------------
+# esp_cam_sensor defaults to all-off; we must opt in to the SC202CS driver
+# and auto-detect for the MIPI-CSI bus or no /dev/video0 will be created.
+CONFIG_CAMERA_SC202CS=y
+CONFIG_CAMERA_SC202CS_AUTO_DETECT=y
+CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1280X720_30FPS=y
+CONFIG_CAMERA_SC202CS_MIPI_DEFAULT_FMT_RAW8_1280X720_30FPS=y
+
+# ---- ISP pipeline controller ----------------------------------------------
+# Without this, esp_ipa collects AE/AWB statistics from the ISP but never
+# writes the computed gains back to the sensor / ISP. Visible symptom:
+# preview is underexposed and tinted green (G2 dominates because no AWB
+# gain is applied to R/B channels). Enabling this spawns the "isp_task"
+# that closes the IPA control loop.
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+
+# ---- Custom SC202CS IPA configuration -------------------------------------
+# The upstream sc202cs_default.json ships a CCM matrix at color_temp 2292K
+# whose M[2][2] = 4.5445 is outside the ESP32-P4 ISP hardware clamp of
+# (-4, 4). The ISP rejects every update from the IPA loop with
+#   "ISP_CCM Matrix[2][2] value 4.87 is out of range"
+# (the 4.87 is the post-AWB-gain value derived from 4.5445). With the
+# update rejected, the CCM stays at the boot-time identity matrix and the
+# preview keeps a permanent green tint.
+#
+# We override with main/sc202cs_tab5.json, which is byte-identical except
+# the 2292K M[2][2] is clamped to 3.99.
+# CONFIG_CAMERA_SC202CS_DEFAULT_IPA_JSON_CONFIGURATION_FILE is not set
+CONFIG_CAMERA_SC202CS_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE=y
+CONFIG_CAMERA_SC202CS_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE_PATH="main/sc202cs_tab5.json"
+
+# ---- Logging ---------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_COLORS=y
+
+# ---- USB (for serial console + future host comms during dev) --------------
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---- Disable features we will not need for the imaging payload ------------
+# (Saves flash & RAM. Re-enable in menuconfig if a feature is needed later.)
+CONFIG_BT_ENABLED=n
+CONFIG_LWIP_IPV6=n
+
+# ---- Camera / imaging knobs (Kconfig-driven, see component sdkconfigs) ----
+# Defaults defined in components/sc850sl/Kconfig.projbuild
+
+# Disable the esp_cam_sensor SPI cam-controller driver. We use MIPI-CSI
+# (which is what the SC850SL and Tab5 SC202CS both need). esp_cam_sensor
+# v1.7.0's src/driver_spi/spi_slave.c calls deprecated spicommon_*
+# signatures and fails to compile on ESP-IDF v6.0.1.
+CONFIG_CAM_CTRL_SPI_ENABLE=n

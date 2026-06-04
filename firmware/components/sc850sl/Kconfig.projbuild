@@ -1,0 +1,58 @@
+menu "SC850SL Camera"
+
+    config SC850SL_I2C_SDA_GPIO
+        int "I²C SDA GPIO"
+        default 8
+        help
+            Stamp-P4 BTB pin routed to SC850SL SDA. Use a 4.7 kΩ pull-up
+            to **DOVDD (1.8 V)**, not to 3.3 V — the sensor's I/O is 1.8 V.
+
+    config SC850SL_I2C_SCL_GPIO
+        int "I²C SCL GPIO"
+        default 9
+
+    config SC850SL_XSHUTDN_GPIO
+        int "XSHUTDN GPIO (active low — sensor reset)"
+        default 10
+        help
+            Drive low to hold sensor in reset / shutdown.
+            Datasheet requires ≥4 ms after release before first I²C transaction.
+
+    config SC850SL_EXTCLK_GPIO
+        int "EXTCLK output GPIO (24 MHz to sensor)"
+        default 11
+        help
+            P4 LEDC peripheral generates 24 MHz on this pin. Sensor PLL is
+            tuned for 24 MHz input (matches M5Stack's BSP).
+
+    config SC850SL_EXTCLK_HZ
+        int "EXTCLK frequency (Hz)"
+        default 24000000
+        help
+            Must match the frequency the init table's PLL was tuned for.
+            For all four extracted tables (tables 0..3), the value is 24 MHz.
+
+    config SC850SL_I2C_FREQ_HZ
+        int "I²C bus frequency (Hz)"
+        default 100000
+        help
+            SC850SL supports fast-mode (400 kHz). Start at 100 kHz for
+            bring-up; raise after the link is proven.
+
+    config SC850SL_DEFAULT_MODE
+        int "Default capture mode (selects init table)"
+        default 2
+        range 0 3
+        help
+            0 = 4K30 RAW10 4-lane (M5Stack LLM630 default)
+            1 = 4K30 HDR-DOL 4-lane
+            2 = 4K15 RAW10 2-lane  ★ CubeSat target mode
+            3 = 4K15 RAW10 2-lane alt (extended HTS)
+
+    config SC850SL_HEARTBEAT_LED_GPIO
+        int "Heartbeat LED GPIO (-1 to disable)"
+        default 14
+        help
+            Optional. Blinks once per second to show the firmware is alive.
+
+endmenu

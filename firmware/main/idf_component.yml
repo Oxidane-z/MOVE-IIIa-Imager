@@ -1,0 +1,39 @@
+# IDF Component Manager manifest for the application.
+#
+# Dependencies are gated by the build target via `rules:` blocks so the
+# SC850SL flight target doesn't waste minutes building the Tab5 demo's
+# LVGL/BSP/DSP stack. Switching the Kconfig choice (CAMERA_TARGET_*)
+# triggers a re-fetch on the next clean build.
+dependencies:
+  idf: ">=6.0.1"
+
+  # Tab5 board support: display, touch, audio codec init. Transitively
+  # pulls esp_video, esp_cam_sensor, esp_codec_dev, the ES8388 driver,
+  # ST7123 panel driver, etc. — about 200 MB of managed_components.
+  # SC850SL build doesn't need any of that.
+  espressif/m5stack_tab5:
+    version: "^1.0"
+    rules:
+      - if: "$CONFIG{CAMERA_TARGET_SC202CS_TAB5} == True"
+
+  # LVGL UI stack. Only the Tab5 demo draws to a screen.
+  espressif/esp_lvgl_port:
+    version: "^2.5"
+    rules:
+      - if: "$CONFIG{CAMERA_TARGET_SC202CS_TAB5} == True"
+
+  # esp-dsp: FFT for the Tab5 SSTV-RX waterfall (Phase 2A).
+  # Large component (hundreds of source files), so gating it shaves
+  # roughly a minute off a clean SC850SL build.
+  espressif/esp-dsp:
+    version: "^1.5"
+    rules:
+      - if: "$CONFIG{CAMERA_TARGET_SC202CS_TAB5} == True"
+
+  # esp_video / esp_cam_sensor are NOT pulled in for the SC850SL build.
+  # esp_video v1.0 doesn't compile against IDF v6.0.1 (API breakage on
+  # CAM_CTLR_COLOR_YUV422 and COLOR_SPACE_TYPE macros). We copied the
+  # IDF-9706 register-poke trick from its source into our pipeline init
+  # (see camera_pipeline_init() in app_sc850sl.c — the ISP.frame_cfg
+  # writes for bypass-ISP raw capture) and that's the only piece we
+  # actually needed.

@@ -1,0 +1,49 @@
+# --- ESP-IDF build outputs -------------------------------------------------
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/managed_components/
+
+# --- One-off logs / scratch ------------------------------------------------
+firmware/build_log.txt
+firmware/cfg_log.txt
+firmware/*.log
+*.log
+
+# --- Large reference material (kept locally, not in version control) -------
+# Vendor datasheets — too large for a code repo, keep them locally only.
+*.pdf
+datasheet_utf8.txt
+mi1602.txt
+SC850SL_数据手册_*.pdf
+
+# Debian packages we pulled apart for R&D — sources of init tables we have
+# already extracted into firmware/components/sc850sl/init_tables/. The
+# .deb files themselves are millions of irrelevant bytes; drop them.
+*.deb
+
+# LLM630 rootfs extraction artifacts — reference tuning JSONs / .axmodel
+# binaries. Keep locally for ISP-tuning hints, exclude from git.
+rootfs_files/
+
+# M5Stack research dump — repo clones, kept local only.
+m5_research/
+
+# --- Editor + OS detritus --------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.bak
+*~
+Thumbs.db
+.DS_Store
+__pycache__/
+
+# --- Archived R&D scratch --------------------------------------------------
+# Bulky extraction leftovers (M5 .deb unpacks, rootfs dumps) relocated here
+# during the June 2026 cleanup. Kept locally for reference, never in git.
+_archive/
+
+# --- Claude Code session caches -------------------------------------------
+.claude/

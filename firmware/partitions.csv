@@ -1,0 +1,10 @@
+# Partition table for the CubeSat imager (16 MB flash).
+# No OTA for now — single factory app, plus NVS for tuning blob / calibration.
+# Partition table itself lives at 0x10000 (set in sdkconfig.defaults).
+# Empty offset cells let IDF auto-place starting after the table.
+#
+# Name,     Type, SubType, Offset,  Size,    Flags
+nvs,        data, nvs,     ,        0x6000,
+phy_init,   data, phy,     ,        0x1000,
+factory,    app,  factory, ,        4M,
+storage,    data, fat,     ,        2M,

@@ -1,0 +1,71 @@
+# Build the per-target source file based on the CAMERA_TARGET_* Kconfig
+# choice. Each app_*.c also self-guards with #ifdef, so even if both
+# were listed unconditionally the wrong one's body would be empty —
+# but actually NOT listing it means the compiler doesn't have to even
+# open the file, which shaves a few seconds off a clean build.
+set(srcs "main.c" "mi1602_probe.c")
+if(CONFIG_CAMERA_TARGET_SC850SL)
+    list(APPEND srcs "app_sc850sl.c")
+elseif(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
+    list(APPEND srcs "app_sc202cs_tab5.c")
+endif()
+
+# Components we always need.
+#
+# NOTE: mi1602 is listed UNCONDITIONALLY. We can't gate it on
+# CONFIG_MI1602_ENABLED here — component REQUIRES are resolved in an
+# early-expansion CMake pass that runs BEFORE Kconfig is loaded, so any
+# `if(CONFIG_*)` around a REQUIRES entry is always false there and the
+# dependency silently drops (build then fails: "mi1602.h ... mi1602
+# component is not in the requirements list"). mi1602_probe.c still
+# self-guards with #if CONFIG_MI1602_ENABLED, so when disabled the
+# component links no active code — only a small compile cost remains.
+set(requires
+    sc850sl
+    mi1602            # MI1602 thermal camera (sibling-folder component)
+    sstv_robot36      # Robot36 SSTV encoder
+    esp_driver_gpio
+    esp_driver_i2c
+    esp_driver_ledc
+    esp_driver_i2s
+    esp_timer
+)
+
+# Tab5 target needs the BSP + LVGL + audio codec stack.
+if(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
+    list(APPEND requires
+        espressif__m5stack_tab5
+        espressif__esp_lvgl_port
+        espressif__esp_codec_dev
+        lvgl__lvgl
+    )
+endif()
+
+# Always-needed private requires. SC850SL needs CSI + ISP + LDO for the
+# MIPI host; both targets touch esp_cache_msync etc. through esp_hw_support.
+set(priv_requires
+    esp_driver_cam               # MIPI CSI receiver (SC850SL path)
+    esp_driver_isp               # On-chip ISP: debayer, AWB, AE, CCM, gamma
+    esp_hw_support               # esp_ldo_acquire_channel (MIPI CSI PHY rail)
+    esp_driver_usb_serial_jtag   # usb_serial_jtag_vfs_set_tx_line_endings (binary-clean USB stream)
+)
+
+# Tab5-only private requires:
+#   - esp_driver_ppa: hardware rotation of the live preview (~1 ms/frame
+#     vs ~85 ms CPU). The SC850SL flight target never rotates.
+#   - espressif__esp-dsp: FFT for the SSTV-RX waterfall (Phase 2A).
+# Gating these means a clean SC850SL build skips ~1-2 minutes of
+# compiling code we'll never link.
+if(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
+    list(APPEND priv_requires
+        esp_driver_ppa
+        espressif__esp-dsp
+    )
+endif()
+
+idf_component_register(
+    SRCS ${srcs}
+    INCLUDE_DIRS "."
+    REQUIRES ${requires}
+    PRIV_REQUIRES ${priv_requires}
+)

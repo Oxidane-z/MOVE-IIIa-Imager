@@ -1,0 +1,173 @@
+menu "CubeSat Imager — Camera target"
+
+choice CAMERA_TARGET
+    prompt "Visible camera target"
+    default CAMERA_TARGET_SC850SL
+    help
+        Pick which sensor (and which board) the firmware is built for.
+        See PROJECT_MEMORY.md section 2 for the platform inventory.
+
+    config CAMERA_TARGET_SC850SL
+        bool "SC850SL (flight target — hand-rolled driver)"
+        help
+            Use the firmware/components/sc850sl/ driver with one of
+            the four init tables extracted from M5Stack LLM630 BSP.
+            Target hardware: M5Stamp-P4 + custom CubeSat carrier with
+            SC850SL FPC, OR Olimex/Waveshare dev board with a 30-pin
+            adapter to a SC850SL CamModule.
+
+    config CAMERA_TARGET_SC202CS_TAB5
+        bool "SC202CS on M5Stack Tab5 (bench / integration)"
+        help
+            Use Espressif's esp_video + esp_cam_sensor stack with the
+            upstream SC202CS driver, on M5Stack Tab5 hardware. (The
+            Tab5's onboard camera sensor is SC202CS — early M5Stack
+            documentation and the M5Tab5-UserDemo sample misname it
+            as SC2336, but the silicon PID readback is 0xeb52 which
+            is SC202CS.) Lets us validate ISP / I²S / SSTV / display
+            pipelines while the SC850SL flight hardware is being
+            prepared.
+endchoice
+
+# ===== Tab5 SC202CS board pins (only relevant when target == Tab5) =====
+config TAB5_CAM_I2C_PORT
+    int "Tab5 SC202CS I²C port"
+    default 0
+    depends on CAMERA_TARGET_SC202CS_TAB5
+    help
+        Tab5 BSP uses port 0 (SYS I2C) for the on-board peripherals
+        including the SC202CS.
+
+config TAB5_CAM_I2C_SDA_GPIO
+    int "Tab5 SC202CS I²C SDA"
+    default 31
+    depends on CAMERA_TARGET_SC202CS_TAB5
+
+config TAB5_CAM_I2C_SCL_GPIO
+    int "Tab5 SC202CS I²C SCL"
+    default 32
+    depends on CAMERA_TARGET_SC202CS_TAB5
+
+config TAB5_CAM_I2C_FREQ_HZ
+    int "Tab5 SC202CS SCCB I²C frequency"
+    default 100000
+    depends on CAMERA_TARGET_SC202CS_TAB5
+
+config TAB5_CAM_MCLK_GPIO
+    int "Tab5 SC202CS MCLK (XCLK) GPIO"
+    default 36
+    depends on CAMERA_TARGET_SC202CS_TAB5
+    help
+        LEDC channel 0 drives a 24 MHz square wave on this pin to clock
+        the SC202CS. Matches M5Stack's bsp_cam_osc_init() in m5stack_tab5.c.
+
+config TAB5_CAM_MCLK_HZ
+    int "Tab5 SC202CS MCLK frequency (Hz)"
+    default 24000000
+    depends on CAMERA_TARGET_SC202CS_TAB5
+
+config TAB5_HEARTBEAT_LED_GPIO
+    int "Tab5 heartbeat LED GPIO (-1 to disable)"
+    default -1
+    depends on CAMERA_TARGET_SC202CS_TAB5
+    help
+        Tab5 has no user-accessible LED in the BSP, so disable by
+        default. Set to a GPIO if you attach an external LED.
+
+endmenu
+
+# ============================================================================
+# MI1602 auxiliary thermal camera (independent of visible-camera target)
+# ============================================================================
+menu "CubeSat Imager — MI1602 thermal camera"
+
+config MI1602_ENABLED
+    bool "Enable MI1602 thermal-camera probe in main app"
+    default y
+    help
+        When enabled, the firmware initializes the MI1602 driver and
+        probes it over I²C right after the visible-camera probe. The
+        SC850SL / Tab5 path keeps working even when MI1602 isn't
+        physically connected (probe failure is logged, not fatal).
+
+if MI1602_ENABLED
+
+config MI1602_I2C_PORT
+    int "MI1602 I²C port"
+    default 1
+    range 0 1
+    help
+        Use a port different from the visible camera's (which is on
+        port 0). Tab5 EXT_I2C is also port 1, so the IR module can
+        share that bus with other expansion peripherals if needed.
+
+config MI1602_I2C_SDA_GPIO
+    int "MI1602 I²C SDA GPIO"
+    default 53
+    help
+        Default 53 matches Tab5's EXT_I2C bus (BSP_EXT_I2C_SDA). Adjust
+        for the Olimex / Stamp-P4 carrier.
+
+config MI1602_I2C_SCL_GPIO
+    int "MI1602 I²C SCL GPIO"
+    default 54
+    help
+        Default 54 matches Tab5's EXT_I2C bus (BSP_EXT_I2C_SCL).
+
+config MI1602_I2C_FREQ_HZ
+    int "MI1602 I²C clock (Hz)"
+    default 100000
+
+config MI1602_I2C_ADDR_HIGH
+    bool "MI1602 ADDR strap high (use I²C addr 0x41 instead of 0x40)"
+    default n
+
+config MI1602_SPI_HOST
+    int "MI1602 SPI host (2 = SPI2_HOST, 3 = SPI3_HOST)"
+    default 2
+
+config MI1602_SPI_FREQ_HZ
+    int "MI1602 SPI clock (Hz)"
+    default 15600000
+    help
+        Senxor MI48 supports 7.8 MHz / 15.6 MHz / 31.2 MHz on ESP32-P4.
+
+config MI1602_SPI_SCLK_GPIO
+    int "MI1602 SPI SCLK"
+    default 12
+
+config MI1602_SPI_MISO_GPIO
+    int "MI1602 SPI MISO (frame data in)"
+    default 13
+
+config MI1602_SPI_MOSI_GPIO
+    int "MI1602 SPI MOSI (dummy out)"
+    default 6
+    help
+        Default 6 avoids GPIO 11 which is the SC850SL EXTCLK pin
+        (LEDC ch0). Override via menuconfig if your carrier routes
+        differently.
+
+config MI1602_SPI_CS_GPIO
+    int "MI1602 SPI CS_n (manual GPIO)"
+    default 15
+
+config MI1602_RESET_GPIO
+    int "MI1602 RESET_N (-1 = unused)"
+    default -1
+
+config MI1602_DATA_READY_GPIO
+    int "MI1602 DATA_READY input (-1 = unused — poll status reg instead)"
+    default -1
+
+config MI1602_SYSCLK_GPIO
+    int "MI1602 SYSCLK output (-1 = module supplies its own clock)"
+    default -1
+
+config MI1602_SYSCLK_HZ
+    int "MI1602 SYSCLK Hz (when SYSCLK_GPIO != -1)"
+    default 3000000
+
+endif  # MI1602_ENABLED
+
+endmenu
