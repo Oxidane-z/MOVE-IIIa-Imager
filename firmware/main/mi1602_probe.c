@@ -52,6 +52,7 @@ void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
 {
     i2c_master_bus_handle_t bus = shared_bus;
     bool created_bus = false;
+    uint8_t detected_addr = 0;   /* MI1602 addr the scan saw (0x40 or 0x41) */
 
 #if MI1602_MODE_GPIO >= 0
     gpio_config_t mode_cfg = {
@@ -99,6 +100,12 @@ void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
             if (i2c_master_probe(bus, a, 50) == ESP_OK) {
                 ESP_LOGI(TAG, "  device found at 0x%02x", a);
                 ++found;
+                /* The MI48 ADDR strap selects 0x40 or 0x41; on this carrier it
+                 * floats and flips across power-ons. Latch whichever address
+                 * the module actually answers on, so we don't probe the wrong
+                 * one (that took the IR pane offline when it landed on 0x40). */
+                if (a == MI1602_I2C_ADDR_DEFAULT || a == MI1602_I2C_ADDR_ALT)
+                    detected_addr = a;
             }
         }
         if (!found) {
@@ -109,13 +116,25 @@ void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
         ESP_LOGI(TAG, "MI1602 aux probe (shared bus from BSP)");
     }
 
+    /* Prefer the address the scan actually saw (the ADDR strap floats on this
+     * carrier); fall back to the Kconfig default if the scan was skipped
+     * (shared bus) or found neither 0x40 nor 0x41. */
+    uint8_t mi_addr =
+#ifdef CONFIG_MI1602_I2C_ADDR_HIGH
+        MI1602_I2C_ADDR_ALT;     /* 0x41 */
+#else
+        MI1602_I2C_ADDR_DEFAULT; /* 0x40 */
+#endif
+    if (detected_addr) {
+        if (detected_addr != mi_addr)
+            ESP_LOGW(TAG, "MI1602 ADDR strap floated to 0x%02x (config wanted "
+                     "0x%02x) — using detected", detected_addr, mi_addr);
+        mi_addr = detected_addr;
+    }
+
     mi1602_config_t cfg = {
         .i2c_bus         = bus,
-#ifdef CONFIG_MI1602_I2C_ADDR_HIGH
-        .i2c_addr        = MI1602_I2C_ADDR_ALT,    /* 0x41 */
-#else
-        .i2c_addr        = MI1602_I2C_ADDR_DEFAULT, /* 0x40 */
-#endif
+        .i2c_addr        = mi_addr,
         .i2c_freq_hz     = CONFIG_MI1602_I2C_FREQ_HZ,
 
         .spi_host        = CONFIG_MI1602_SPI_HOST,

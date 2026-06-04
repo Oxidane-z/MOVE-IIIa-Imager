@@ -171,6 +171,19 @@ esp_err_t sc850sl_write_reg(sc850sl_handle_t h, uint16_t reg, uint8_t val)
     return r;
 }
 
+/* Fast single-shot write for per-frame hot paths (host AE): ONE attempt,
+ * short timeout, and crucially NO i2c_master_bus_reset on failure. The full
+ * sc850sl_write_reg() resets the bus on every failed attempt, and when the
+ * bus is genuinely stuck mid-stream that reset itself hits a hardware-reset
+ * timeout and blocks the caller for seconds — which tripped the task watchdog
+ * and put the board in a reboot loop. The AE loop would rather skip an update
+ * than hang, so it uses this and bails on the first failure. */
+esp_err_t sc850sl_write_reg_fast(sc850sl_handle_t h, uint16_t reg, uint8_t val)
+{
+    uint8_t buf[3] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xff), val };
+    return i2c_master_transmit(h->i2c_dev, buf, sizeof(buf), 20 /*ms*/);
+}
+
 esp_err_t sc850sl_read_reg(sc850sl_handle_t h, uint16_t reg, uint8_t *val)
 {
     uint8_t addr[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xff) };

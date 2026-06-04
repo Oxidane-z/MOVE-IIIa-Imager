@@ -108,6 +108,10 @@ esp_err_t sc850sl_wake(sc850sl_handle_t h);
 
 /* Low-level register access (escape hatch for bring-up / debug). */
 esp_err_t sc850sl_write_reg(sc850sl_handle_t h, uint16_t reg, uint8_t val);
+/* Single-shot, no-bus-reset write for per-frame hot paths (host AE): one
+ * attempt, short timeout, never resets the bus — so a stuck bus can't block
+ * the caller (the normal write's retry-storm tripped the task watchdog). */
+esp_err_t sc850sl_write_reg_fast(sc850sl_handle_t h, uint16_t reg, uint8_t val);
 esp_err_t sc850sl_read_reg(sc850sl_handle_t h, uint16_t reg, uint8_t *val);
 
 /* Release handle, cut power rails, leave XSHUTDN low. */

@@ -170,30 +170,35 @@ static uint16_t g_exposure = 0x0020;   /* legacy ISP-AE var (unused in bypass pa
  *
  * Frame timing (table_2): VTS = 0x08ca = 2250 lines. Max exposure is
  * VTS-4 (table 2-4). Exposure is in line units, programmed across
- * {0x3e00[3:0],0x3e01[7:0],0x3e02[7:4]}. Analog gain is coarse 0x3e08 +
- * fine 0x3e09 (table 2-6; 0x03/0x40 = 1.0x). Writes only take effect
- * when committed through a GROUP HOLD (reg 0x3800) — that was the
- * missing piece that made our earlier exposure sweep do nothing. */
+ * {0x3e00[3:0],0x3e01[7:0],0x3e02[7:4]}. Analog gain is the piecewise
+ * DCG+analog code on 0x3e06/0x3e08/0x3e09 (vendor recipe, task #22).
+ * Writes take effect on a plain register write (sensor latches at the next
+ * frame); there is NO group-hold, and we must NOT set 0x3e03 — doing either
+ * was exactly what made our earlier exposure sweep do nothing. */
 #define SC850SL_VTS_LINES   2250
 #define SC850SL_EXP_MAX     (SC850SL_VTS_LINES - 4)   /* 2246 */
 #define SC850SL_EXP_MIN     2
 #define AE_TARGET_RAW       110     /* target raw-frame mean (8-bit) */
 #define AE_DEAD_RAW         10
 
-/* Ascending analog-gain ladder, (coarse 0x3e08, fine 0x3e09) per
- * datasheet table 2-6. Exposure-priority AE keeps gain at index 0 (1x,
- * lowest noise) and only climbs this when exposure is already maxed. */
-static const struct { uint8_t c, f; } g_gain_ladder[] = {
-    {0x03, 0x40},   /* 1.0x */
-    {0x03, 0x60},   /* 1.5x */
-    {0x07, 0x40},   /* 2.0x */
-    {0x07, 0x60},   /* 3.0x */
-    {0x23, 0x40},   /* ~4.0x */
-};
-#define GAIN_LADDER_N (int)(sizeof(g_gain_ladder)/sizeof(g_gain_ladder[0]))
+/* Gain is expressed in 1024 = 1.0x units (the vendor driver's convention);
+ * sc850sl_set_exp_gain() maps it to the SC850SL's piecewise DCG+analog code
+ * per the recipe recovered from sensor_sc850sl_mipi.c (task #22). */
+#define SC850SL_GAIN_UNITY  1024u
+#define SC850SL_GAIN_MAX    50790u   /* 49.6x — datasheet SENSOR_MAXGAIN */
 
-static uint32_t g_ae_exp  = 256;   /* current exposure (lines) */
-static int      g_ae_gain = 0;     /* current index into g_gain_ladder */
+/* Anti-flicker: snap exposure to whole light-ripple periods so AC-lit scenes
+ * don't band. Line period for our 2-lane 4K15 mode ≈ frame(66.67ms @15fps) /
+ * VTS(2250) = 29.63 µs; 50 Hz mains ripples at 100 Hz → 10 ms, 60 Hz → 8.33 ms.
+ * g_antiflicker_hz = 0 disables it. (If banding persists the true line period
+ * differs from the estimate — just retune SC850SL_LINE_PERIOD_NS.) */
+#define SC850SL_LINE_PERIOD_NS    29630u
+#define SC850SL_FLICKER_LINES_50  ((10000000u + SC850SL_LINE_PERIOD_NS/2) / SC850SL_LINE_PERIOD_NS) /* ~338 */
+#define SC850SL_FLICKER_LINES_60  (( 8333333u + SC850SL_LINE_PERIOD_NS/2) / SC850SL_LINE_PERIOD_NS) /* ~281 */
+static int g_antiflicker_hz = 50;   /* 0 = off, 50, or 60 */
+
+static uint32_t g_ae_exp_lines  = 676;                 /* current exposure (lines), ~20 ms */
+static uint32_t g_ae_gain_x1024 = SC850SL_GAIN_UNITY;  /* current gain, 1024 = 1.0x */
 
 /* Gray-world AWB per-channel gains (green normalized to 1.0), updated
  * each frame in the demosaic. Declared here so usb_stream_send can log
@@ -846,75 +851,117 @@ static esp_err_t camera_isp_bypass_start(void)
     return ESP_OK;
 }
 
-/* Atomically program exposure (lines) + analog gain via the SC850SL
- * group-hold latch (datasheet 2.4). WITHOUT this latch, writes to the
- * exposure bytes don't take effect — which is exactly why our earlier
- * exposure sweep produced zero brightness change. Sequence:
- *   0x3800=0x00  begin packing into group 0
- *   <write exposure + gain regs>
- *   0x3800=0x10  end packing
- *   0x3800=0x60  group 0 takes effect immediately
- * Exposure field = {0x3e00[3:0],0x3e01[7:0],0x3e02[7:4]} in line units. */
-static void sc850sl_set_exp_gain(uint32_t lines, uint8_t again_c, uint8_t again_f)
+/* Program exposure (lines) + analog gain (gain_x1024, 1024 = 1.0x) using the
+ * recipe recovered from the vendor/OpenIPC SC850SL driver
+ * (sensor_sc850sl_mipi.c: pCus_SetAEUSecs / pCus_SetAEGain — see task #22).
+ *
+ * Corrections vs the old code, which is why manual exposure/gain did NOTHING:
+ *   - NO group-hold register. The SC850SL has none at 0x3800 (that is not a
+ *     group-hold address); the vendor just writes the registers plainly and
+ *     the sensor latches them at its next frame boundary. The old 0x3800
+ *     pack/commit poking + the boot-time 0x3e03=0x0b "AGC enable" were what
+ *     stopped our writes from taking effect.
+ *   - Gain is the piecewise DCG + analog code, not a raw ladder value.
+ * Exposure field = {0x3e00[3:0],0x3e01[7:0],0x3e02[7:4]}, value = lines << 4. */
+static void sc850sl_set_exp_gain(uint32_t lines, uint32_t gain_x1024)
 {
     if (!g_cam) return;
     if (lines < SC850SL_EXP_MIN) lines = SC850SL_EXP_MIN;
     if (lines > SC850SL_EXP_MAX) lines = SC850SL_EXP_MAX;
-    sc850sl_write_reg(g_cam, 0x3800, 0x00);                  /* group 0: pack start */
-    sc850sl_write_reg(g_cam, 0x3e00, (lines >> 12) & 0x0f);
-    sc850sl_write_reg(g_cam, 0x3e01, (lines >> 4)  & 0xff);
-    sc850sl_write_reg(g_cam, 0x3e02, (lines << 4)  & 0xf0);
-    sc850sl_write_reg(g_cam, 0x3e08, again_c);
-    sc850sl_write_reg(g_cam, 0x3e09, again_f);
-    sc850sl_write_reg(g_cam, 0x3800, 0x10);                  /* group 0: pack end */
-    sc850sl_write_reg(g_cam, 0x3800, 0x60);                  /* group 0: effective now */
+
+    /* Exposure: 20-bit field carries lines<<4 (low nibble = 1/16-line frac).
+     * Use the FAST (no-bus-reset) write and bail on the first failure: this is
+     * a per-frame hot path, and a stuck SC850SL I2C bus must not block the
+     * stream task — the normal write's retry+bus-reset storm did exactly that
+     * and tripped the task watchdog into a reboot loop. AE just skips this
+     * update and tries again next cycle. */
+    uint32_t v = lines << 4;
+    if (sc850sl_write_reg_fast(g_cam, 0x3e00, (v >> 16) & 0x0f) != ESP_OK) return;
+    sc850sl_write_reg_fast(g_cam, 0x3e01, (v >>  8) & 0xff);
+    sc850sl_write_reg_fast(g_cam, 0x3e02, (v >>  0) & 0xf0);
+
+    /* Gain: choose the coarse DCG+analog code and DCG base, then the fine
+     * mantissa = 64*gain/(dcg*coarse), which lands in [0x40,0x7f]. */
+    uint32_t g = gain_x1024;
+    if (g < SC850SL_GAIN_UNITY) g = SC850SL_GAIN_UNITY;
+    if (g > SC850SL_GAIN_MAX)   g = SC850SL_GAIN_MAX;
+    uint8_t  coarse_reg;
+    uint32_t dcg, coarse;
+    if      (g < 2048)  { coarse = 1; dcg = 1024; coarse_reg = 0x03; }
+    else if (g < 3200)  { coarse = 2; dcg = 1024; coarse_reg = 0x07; }
+    else if (g < 6400)  { coarse = 1; dcg = 3200; coarse_reg = 0x23; }
+    else if (g < 12800) { coarse = 2; dcg = 3200; coarse_reg = 0x27; }
+    else if (g < 25600) { coarse = 4; dcg = 3200; coarse_reg = 0x2f; }
+    else                { coarse = 8; dcg = 3200; coarse_reg = 0x3f; }
+    uint32_t fine = (64u * g) / (dcg * coarse);
+    if (fine < 0x40) fine = 0x40;
+    if (fine > 0x7f) fine = 0x7f;
+    sc850sl_write_reg_fast(g_cam, 0x3e06, 0x00);          /* digital gain = 1.0x */
+    sc850sl_write_reg_fast(g_cam, 0x3e08, coarse_reg);
+    sc850sl_write_reg_fast(g_cam, 0x3e09, (uint8_t)fine);
 }
 
-/* One host-AE step. Exposure-priority per datasheet 2.3.1: brighten by
- * raising exposure first (better SNR), only climbing the gain ladder
- * once exposure is railed at max; darken by dropping gain first, then
- * exposure. Called once per captured frame with the raw-frame mean.
- * Per-step ratio is clamped so it converges smoothly without flapping. */
+/* One host-AE step, exposure-priority. Brighten by raising exposure first
+ * (best SNR), then gain once exposure is railed; darken by dropping gain to
+ * 1x first, then shortening exposure. Per-step ratio is clamped for smooth
+ * convergence; with anti-flicker on, exposure snaps to whole light-ripple
+ * periods. Called once per captured frame with the raw-frame mean (8-bit).
+ *
+ * Re-enabled June 2026: exposure/gain writes finally take effect now that
+ * sc850sl_set_exp_gain() dropped the bogus 0x3800 group-hold and we removed
+ * the boot 0x3e03=0x0b write (see task #22). */
 static void ae_step(int raw_mean)
 {
-    /* DISABLED: a clean single-boot sweep proved the SC850SL ignores our
-     * exposure (256→2246 lines) AND analog gain (1x→4x) writes even via
-     * group-hold with AGC enabled (0x3e03=0x0b) — mean stayed pinned at
-     * 65 the whole sweep. So host AE can't work until we recover the full
-     * exposure/gain write sequence the vendor driver (libsns_sc850sl.so)
-     * uses. Until then, leave the sensor at its fixed boot exposure and
-     * don't spam I²C group-hold writes every frame. */
-    (void)raw_mean;
-    return;
-#if 0
-    if (raw_mean < 2) return;                       /* no signal yet */
+    if (raw_mean < 2) return;                         /* no signal yet */
     int err = AE_TARGET_RAW - raw_mean;
     if (err > -AE_DEAD_RAW && err < AE_DEAD_RAW) return;   /* close enough */
 
     float ratio = (float)AE_TARGET_RAW / (float)raw_mean;
-    if (ratio > 2.0f) ratio = 2.0f;                 /* clamp per-step change */
+    if (ratio > 2.0f) ratio = 2.0f;                   /* clamp per-step change */
     if (ratio < 0.5f) ratio = 0.5f;
 
-    if (ratio > 1.0f) {                             /* need brighter */
-        uint32_t ne = (uint32_t)(g_ae_exp * ratio + 0.5f);
-        if (ne <= SC850SL_EXP_MAX) {
-            g_ae_exp = ne;
-        } else {
-            g_ae_exp = SC850SL_EXP_MAX;             /* exposure railed → add gain */
-            if (g_ae_gain < GAIN_LADDER_N - 1) g_ae_gain++;
+    uint32_t exp  = g_ae_exp_lines;
+    uint32_t gain = g_ae_gain_x1024;
+
+    if (ratio > 1.0f) {                               /* need brighter */
+        if (exp < SC850SL_EXP_MAX) {                  /* raise exposure first */
+            uint32_t ne = (uint32_t)(exp * ratio + 0.5f);
+            if (ne > SC850SL_EXP_MAX) ne = SC850SL_EXP_MAX;
+            exp = ne;
+        } else {                                      /* exposure railed → gain */
+            uint32_t ng = (uint32_t)(gain * ratio + 0.5f);
+            if (ng > SC850SL_GAIN_MAX) ng = SC850SL_GAIN_MAX;
+            gain = ng;
         }
-    } else {                                        /* need darker */
-        if (g_ae_gain > 0) {
-            g_ae_gain--;                            /* drop gain before exposure */
-        } else {
-            uint32_t ne = (uint32_t)(g_ae_exp * ratio + 0.5f);
+    } else {                                          /* need darker */
+        if (gain > SC850SL_GAIN_UNITY) {              /* drop gain first */
+            uint32_t ng = (uint32_t)(gain * ratio + 0.5f);
+            if (ng < SC850SL_GAIN_UNITY) ng = SC850SL_GAIN_UNITY;
+            gain = ng;
+        } else {                                      /* gain at 1x → shorten exp */
+            uint32_t ne = (uint32_t)(exp * ratio + 0.5f);
             if (ne < SC850SL_EXP_MIN) ne = SC850SL_EXP_MIN;
-            g_ae_exp = ne;
+            exp = ne;
         }
     }
-    sc850sl_set_exp_gain(g_ae_exp, g_gain_ladder[g_ae_gain].c,
-                         g_gain_ladder[g_ae_gain].f);
-#endif  /* AE disabled pending exposure/gain register reverse-engineering */
+
+    /* Anti-flicker: snap exposure to whole ripple periods, but only once it's
+     * at least one period; below that (very bright AC scene) let it run
+     * continuous and accept some banding rather than overexpose. */
+    if (g_antiflicker_hz) {
+        uint32_t fl = (g_antiflicker_hz == 60) ? SC850SL_FLICKER_LINES_60
+                                               : SC850SL_FLICKER_LINES_50;
+        if (exp >= fl) {
+            uint32_t m = (exp + fl / 2) / fl;
+            if (m < 1) m = 1;
+            exp = m * fl;
+            if (exp > SC850SL_EXP_MAX) exp = (SC850SL_EXP_MAX / fl) * fl;
+        }
+    }
+
+    g_ae_exp_lines  = exp;
+    g_ae_gain_x1024 = gain;
+    sc850sl_set_exp_gain(exp, gain);
 }
 
 /* OLD ISP-AE task — disabled. We bypass the ISP, so there are no ISP AE
@@ -1075,12 +1122,13 @@ static void usb_stream_send(int cycle)
          * between frames. A throttled summary still prints 1/30 below. */
     }
 
-    /* Host auto-exposure: drive the sensor's own exposure + analog gain
-     * (via group hold) toward the target raw mean. This replaces the old
-     * software-gain multiply, which amplified the already-8-bit-truncated
-     * raw values and produced posterization "stripes" in smooth areas.
-     * Doing it in the sensor's 10-bit analog domain is clean. */
-    ae_step(raw_mean);
+    /* Host auto-exposure: drive the sensor's exposure + analog gain toward the
+     * target raw mean (clean 10-bit analog domain, vs the old software-gain
+     * multiply that posterized). Throttled to every 4th frame — the scene
+     * doesn't change fast, and it bounds the per-frame I2C write load on the
+     * flaky SC850SL bus (which, hammered every frame, was stalling and
+     * watchdog-resetting the board). */
+    if ((cycle % 4) == 0) ae_step(raw_mean);
 
     /* Composite layout: RGB visible (left pane) | thermal (right pane).
      * Both panes are USB_PANE_W × USB_PANE_H inside a USB_STREAM_W-wide
@@ -1132,9 +1180,10 @@ static void usb_stream_send(int cycle)
      * trailer and BEFORE the next magic, so the host's magic search skips it
      * cleanly — keeps headless serial-capture debugging possible. */
     if ((cycle % 30) == 0) {
-        ESP_LOGI(TAG, "usb_stream[%d]: %u B frame wrote=%zu  raw min=%d max=%d "
-                 "mean=%d bl=%d wb r=%.2f b=%.2f thermal=%s",
+        ESP_LOGI(TAG, "usb_stream[%d]: %u B wrote=%zu  raw min=%d max=%d mean=%d "
+                 "exp=%u gainx1024=%u bl=%d wb r=%.2f b=%.2f thermal=%s",
                  cycle, (unsigned)USB_FRAME_TOTAL, n, raw_min, raw_max, raw_mean,
+                 (unsigned)g_ae_exp_lines, (unsigned)g_ae_gain_x1024,
                  g_black_level, g_wb_r, g_wb_b, tr == ESP_OK ? "ok" : "none");
     }
 }
@@ -1568,16 +1617,15 @@ void app_run(void)
              * gain blew the scene out to white (raw mean ~200, lots of
              * 255s). Pull exposure down ~4x and gain back to 1x; we'll
              * fine-tune from the raw-stats readout. */
-            /* Enable manual AGC control path (datasheet 2.3.3:
-             * "set 0x3e03[3:0] = 0xb"), then prime the initial exposure +
-             * 1x gain through the group-hold latch. The host AE loop in
-             * usb_stream_send takes over from here. */
-            sc850sl_write_reg(g_cam, 0x3e03, 0x0b);
-            g_ae_exp  = 256;
-            g_ae_gain = 0;
-            sc850sl_set_exp_gain(g_ae_exp, g_gain_ladder[0].c, g_gain_ladder[0].f);
-            ESP_LOGI(TAG, "AGC manual mode (0x3e03=0x0b), exp=%u lines, gain=1.0x",
-                     (unsigned) g_ae_exp);
+            /* Prime a moderate initial exposure + 1x gain using the vendor
+             * recipe — NO 0x3e03 "AGC enable" and NO group-hold (those were
+             * exactly why manual exposure/gain did nothing). The host-AE loop
+             * in usb_stream_send converges from here. */
+            g_ae_exp_lines  = 676;        /* ~20 ms at our line period */
+            g_ae_gain_x1024 = SC850SL_GAIN_UNITY;
+            sc850sl_set_exp_gain(g_ae_exp_lines, g_ae_gain_x1024);
+            ESP_LOGI(TAG, "exp/gain primed: %u lines @1.0x (vendor recipe; host-AE active)",
+                     (unsigned) g_ae_exp_lines);
 
             /* Start the CSI receiver FIRST, then turn the sensor stream on.
              * If we did it the other way around (stream_on → start), the
