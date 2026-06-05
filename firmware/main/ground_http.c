@@ -287,6 +287,42 @@ static esp_err_t stream_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ---- HD still capture, served at /capture.jpg (P4) --------------------- */
+static esp_err_t capture_get(httpd_req_t *req)
+{
+    if (!s_jpeg) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no encoder"); return ESP_FAIL; }
+    const int w = 1280, h = 720;             /* HD still downscaled from the 4K frame */
+    const size_t in_sz = (size_t)w * h * 2, out_cap = 384 * 1024;
+    jpeg_encode_memory_alloc_cfg_t im = { .buffer_direction = JPEG_ENC_ALLOC_INPUT_BUFFER };
+    jpeg_encode_memory_alloc_cfg_t om = { .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER };
+    size_t ic = 0, oc = 0;
+    uint8_t *in  = jpeg_alloc_encoder_mem(in_sz,   &im, &ic);   /* ~1.8 MB, freed below */
+    uint8_t *out = jpeg_alloc_encoder_mem(out_cap, &om, &oc);
+    uint32_t outlen = 0;
+    bool ok = false;
+    if (in && out && ground_render_hd(in, w, h)) {
+        jpeg_encode_cfg_t cfg = { .width = w, .height = h,
+            .src_type = JPEG_ENCODE_IN_FORMAT_RGB565, .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
+            .image_quality = 88, .pixel_reverse = false };
+        xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
+        ok = (jpeg_encoder_process(s_jpeg, &cfg, in, in_sz, out, oc, &outlen) == ESP_OK);
+        xSemaphoreGive(s_jpeg_mtx);
+    }
+    esp_err_t ret;
+    if (ok) {
+        httpd_resp_set_type(req, "image/jpeg");
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"sc850sl_hd.jpg\"");
+        ret = httpd_resp_send(req, (const char *)out, outlen);
+    } else {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "HD capture unavailable (no frame yet, or out of memory)");
+        ret = ESP_OK;
+    }
+    free(in); free(out);
+    return ret;
+}
+
 /* ---- device log ring, served at /api/log (P4) -------------------------- */
 /* A global esp_log vprintf hook tees every log line into a wrap-around ring so
  * the web UI can show recent device logs without a USB cable — the whole point
@@ -403,6 +439,7 @@ esp_err_t ground_http_start(void)
     httpd_uri_t u_strm = { .uri = "/stream",       .method = HTTP_GET,  .handler = stream_get };
     httpd_uri_t u_ota  = { .uri = "/api/ota",      .method = HTTP_POST, .handler = ota_post };
     httpd_uri_t u_log  = { .uri = "/api/log",      .method = HTTP_GET,  .handler = log_get  };
+    httpd_uri_t u_cap  = { .uri = "/capture.jpg",  .method = HTTP_GET,  .handler = capture_get };
     httpd_register_uri_handler(s_server, &u_root);
     httpd_register_uri_handler(s_server, &u_tlm);
     httpd_register_uri_handler(s_server, &u_cmd);
@@ -410,6 +447,7 @@ esp_err_t ground_http_start(void)
     httpd_register_uri_handler(s_server, &u_strm);
     httpd_register_uri_handler(s_server, &u_ota);
     httpd_register_uri_handler(s_server, &u_log);
+    httpd_register_uri_handler(s_server, &u_cap);
 
     /* Bring up the hardware JPEG encoder for the live preview. Non-fatal: if it
      * fails the server still serves telemetry + control, just no image. */

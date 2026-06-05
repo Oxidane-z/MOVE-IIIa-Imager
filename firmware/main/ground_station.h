@@ -77,6 +77,9 @@ void   ground_cmd_post(const ground_cmd_t *cmd);
 /* Active /stream (MJPEG) client count; the camera task uses it to skip the
  * software-ISP render when nobody is watching. */
 int    ground_preview_clients(void);
+/* Downscale the latest full-res capture to a w*h RGB565 still in dst (for the
+ * web HD capture). Returns false if no frame is available. In app_sc850sl.c. */
+bool   ground_render_hd(void *dst, int w, int h);
 
 /* Start the web server. Call once the station has an IP; idempotent. */
 esp_err_t ground_http_start(void);

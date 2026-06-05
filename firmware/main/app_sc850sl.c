@@ -1620,6 +1620,21 @@ static void downscale_raw10_bggr_to_rgb565(const uint8_t *src, int sw, int sh,
     g_focus = (dw > 0 && dh > 0) ? (uint32_t)(focus_acc / ((uint64_t)dw * dh)) : 0;
 }
 
+#if CONFIG_GROUND_WIFI_ENABLE
+/* Downscale the latest full-res capture to a w*h RGB565 still (web HD capture).
+ * Reuses the software ISP; serialized against the capture DMA by g_capture_mutex.
+ * Runs in the httpd task (~0.6 s, one-shot). false if no frame yet. */
+bool ground_render_hd(void *dst, int w, int h)
+{
+    if (!g_cam_ready || !g_capture_buf || !dst) return false;
+    if (g_capture_mutex) xSemaphoreTake(g_capture_mutex, portMAX_DELAY);
+    downscale_raw10_bggr_to_rgb565((const uint8_t *)g_capture_buf, CAPTURE_W, CAPTURE_H,
+                                   (uint16_t *)dst, w, h, w);
+    if (g_capture_mutex) xSemaphoreGive(g_capture_mutex);
+    return true;
+}
+#endif
+
 /* ---------------------------------------------------------------- *
  *  Periodic SSTV TX task
  * ---------------------------------------------------------------- */

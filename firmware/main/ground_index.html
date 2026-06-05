@@ -75,9 +75,8 @@
     <div class="row"><label>gain x1024</label><input type="number" id="m_gain" min="1024" max="406320" value="1024">
       <button onclick="cmd('ae_en=0&exp='+v('m_exp')+'&gain='+v('m_gain'))">Apply (AE off)</button></div>
     <h2 style="margin-top:14px;">Actions</h2>
-    <button class="alt" onclick="cmd('capture=1')">Capture HD</button>
+    <a href="/capture.jpg" download><button class="alt">HD capture (1280×720 JPEG)</button></a>
     <button class="alt" onclick="cmd('sstv=1')">SSTV TX</button>
-    <a href="/capture.raw" download><button class="alt">Download HD</button></a>
     <button class="alt" onclick="cmd('save=1')">Save settings</button>
     <button class="alt" onclick="if(confirm('Reboot the board?'))cmd('reboot=1')">Reboot</button>
   </section>
