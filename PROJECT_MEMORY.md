@@ -1575,6 +1575,60 @@ guard may hunt slightly around the clip boundary on extreme-DR scenes.
 
 ---
 
+## 13. Ground WiFi + web station via C6 addon (2026-06-05)
+
+Ground-test convenience layer so the flight board can be driven + updated over
+WiFi without USB. **Full operator guide: `docs/GROUND_WIFI.md`.** Everything is
+gated behind `CONFIG_GROUND_WIFI_ENABLE` (default OFF) — the flight build is
+unaffected (verified byte-identical when off).
+
+**Architecture.** P4 has no radio; the M5 Stamp-AddOn C6 is a WiFi co-processor
+over SDIO via `esp_wifi_remote` + `esp_hosted`. P4 host Slot-1 flexible GPIOs,
+addon-wired to **G42-48** (CLK43/CMD44/D0-3=45-48/RST42). The addon's
+pre-flashed ESP-Hosted slave fw was compatible first try — **no C6 reflash**.
+
+**Status.**
+- **HW-verified:** P1 link+STA (`got ip 10.200.0.121`) and P2 telemetry+control
+  (`/`, `/api/tlm`, `/api/cmd`). Live timing telemetry confirmed software-ISP
+  ~0.66 s, USB ~0.36 s per frame.
+- **Built clean, NOT yet HW-tested** (board unplugged before flash): P3 JPEG
+  live preview (`/snapshot.jpg`, MJPEG `/stream`), **OTA over WiFi**
+  (`/api/ota`), on-demand ISP (render only when a `/stream` viewer is up or USB
+  push on), USB binary push default OFF on WiFi build, mDNS+DHCP hostname
+  (**move-imager.local**), `/api/log` device-log ring.
+
+**The bug we hit + fixed (P1):** starting WiFi before `app_run()` collided with
+the SC850SL stream-on — the WiFi-connect transient wedged the sensor's port-0
+I²C bus mid-stream-on (port-1 MI1602 survived). Fix: `ground_wifi_start()` moved
+to the `idle:` label in `app_sc850sl.c`, after the camera is streaming.
+
+**Files:** `main/ground_wifi.c` (STA + mDNS), `main/ground_http.c` (server +
+all endpoints + JPEG + OTA + log ring), `main/ground_station.h` (app<->server
+snapshot/mailbox interface), `main/ground_index.html` (embedded page),
+`sdkconfig.defaults.ground` (committed non-secret overlay) +
+`sdkconfig.ground.secret` (gitignored creds), `_build_ground.bat`,
+`tools/raw_grab.py` (raw byte capture + frame/log parser — capture_serial.py
+UTF-8-mangles the binary stream). Deps: `esp_wifi_remote`/`esp_hosted`/`mdns`
+gated in `idf_component.yml`; `esp_wifi`/`esp_http_server`/`esp_driver_jpeg`/
+`nvs_flash` are unconditional CMake REQUIRES (IDF built-ins can't be
+Kconfig-gated; flight dead-strips them).
+
+**RESUME (board must be connected):**
+1. One **USB flash** of the ground build (`_build_ground.bat` → `_flash.bat`)
+   to put the OTA-capable image on the board — the board currently runs the
+   P2 image (no OTA). `_erase_flash.bat` first only if the partition layout
+   changed.
+2. Then verify the untested pile: open `http://move-imager.local/` → live
+   preview (`/stream`), telemetry, a `/api/ota` upload round-trip, `/api/log`,
+   and confirm idle ISP≈0 (on-demand) when no viewer.
+3. Remaining P4: full-res HD download, SSTV trigger from web (task #23), and
+   re-test SDIO at 40 MHz (C6 reports the PCB supports it; we run 20 MHz).
+
+Commits: `82b2102` P2 · `1ba5120` P3+OTA+mDNS+on-demand · `e3de44f`
+`/api/log`+`GROUND_WIFI.md`.
+
+---
+
 - ESP-IDF v6.0.1 release: <https://github.com/espressif/esp-idf/releases/tag/v6.0.1>
 - ESP-IDF v6.0 breaking changes: <https://github.com/espressif/esp-idf/issues/17052>
 - ESP32-P4 ISP API (v6.0.1): <https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32p4/api-reference/peripherals/isp.html>
