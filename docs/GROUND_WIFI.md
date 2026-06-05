@@ -67,12 +67,14 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 | `/api/cmd`      | POST   | control — query params below                       |
 | `/snapshot.jpg` | GET    | one hardware-JPEG frame of the 640×240 composite   |
 | `/stream`       | GET    | MJPEG live preview (RGB \| thermal)                |
+| `/capture.jpg`  | GET    | HD still — 1280×720 JPEG download                  |
 | `/api/ota`      | POST   | firmware update — raw `.bin` as the body           |
 | `/api/log`      | GET    | recent device log (last ~4 KB)                     |
 
-`/api/cmd` params (integers; omit to leave unchanged):
-`ae_target=<mean>`, `ae_en=0|1`, `exp=<lines>`, `gain=<x1024>`, `usb=0|1`
-(toggle the legacy USB binary preview push), `sstv=1`/`capture=1` (P4, TODO).
+`/api/cmd` params (omit any to leave unchanged):
+- exposure/AE: `ae_target=<mean>`, `ae_en=0|1`, `exp=<lines>`, `gain=<x1024>`
+- colour: `awb=0|1`, `wb_r=<f>`, `wb_b=<f>`, `bl=<n>`, `ccm0..ccm8=<f>` (3×3)
+- ops: `usb=0|1` (USB push), `save=1` (persist to NVS), `reboot=1`, `sstv=1`
 
 ## OTA over WiFi
 
@@ -94,8 +96,18 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
   **off** on the WiFi build; the web `/stream` replaces it and it frees the USB
   console + ~0.36 s/frame of I/O. Re-enable at runtime with `/api/cmd?usb=1`.
 
-## Still TODO (P4 remainder)
+## Done since P2
 
-- Full-resolution HD still download (`/capture.raw` or a full-frame JPEG).
-- SSTV TX trigger from the web (`/api/cmd?sstv=1`; task #23 re-enables the TX).
+Live preview (`/stream`, `/snapshot.jpg`), OTA, `/api/log`, on-demand ISP,
+system-health telemetry + reboot + NVS-persisted settings, live colour tuning
+(AWB / WB / black-level / CCM) + focus aid, HD still (`/capture.jpg`), and
+web-triggered SSTV. All built clean — **the whole stack is pending one
+on-hardware test pass** (board was unplugged during development).
+
+## Still TODO
+
+- RS422 link + command dispatch to the OBC — the flight comms (task #28 step 2).
+- Board temperature (AT30TS74 @0x48) — needs the LP-I²C bus brought up.
+- Store the HD still to the FAT `storage` partition (pairs with RS422 downlink).
 - Re-check SDIO at 40 MHz (the C6 reports the PCB supports it; we run 20 MHz).
+- MI1602 thermal still stuck BOOTING_UP (task #27, hardware).
