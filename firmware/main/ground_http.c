@@ -126,7 +126,8 @@ static esp_err_t tlm_get(httpd_req_t *req)
         "\"exp\":%u,\"gain\":%u,\"bl\":%d,\"wbr\":%.2f,\"wbb\":%.2f,"
         "\"ae_target\":%d,\"ae_en\":%d,\"cap_us\":%lld,\"isp_us\":%lld,\"usb_us\":%lld,"
         "\"stream\":%d,\"thermal\":%d,"
-        "\"heap\":%u,\"heap_min\":%u,\"psram\":%u,\"reset\":%d}",
+        "\"heap\":%u,\"heap_min\":%u,\"psram\":%u,\"reset\":%d,"
+        "\"focus\":%u,\"awb\":%d}",
         v ? 1 : 0, ip, rssi, (long long)(esp_timer_get_time() / 1000000),
         (unsigned)t.seq, (unsigned)t.w, (unsigned)t.h,
         t.raw_min, t.raw_max, t.raw_mean, t.raw_sat_ppm,
@@ -134,7 +135,8 @@ static esp_err_t tlm_get(httpd_req_t *req)
         t.ae_target, t.ae_enabled ? 1 : 0,
         (long long)t.t_cap_us, (long long)t.t_isp_us, (long long)t.t_usb_us,
         t.cam_streaming ? 1 : 0, t.thermal_ok ? 1 : 0,
-        (unsigned)t.heap_free, (unsigned)t.heap_min, (unsigned)t.psram_free, t.reset_reason);
+        (unsigned)t.heap_free, (unsigned)t.heap_min, (unsigned)t.psram_free, t.reset_reason,
+        (unsigned)t.focus, t.awb_enabled ? 1 : 0);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
@@ -142,10 +144,19 @@ static esp_err_t tlm_get(httpd_req_t *req)
 /* Parse one int query param; returns def if absent. */
 static int qparam(httpd_req_t *req, const char *key, int def)
 {
-    char q[256], val[24];
+    char q[320], val[24];
     if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
         httpd_query_key_value(q, key, val, sizeof val) == ESP_OK)
         return atoi(val);
+    return def;
+}
+
+static float qparamf(httpd_req_t *req, const char *key, float def)
+{
+    char q[320], val[24];
+    if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+        httpd_query_key_value(q, key, val, sizeof val) == ESP_OK)
+        return strtof(val, NULL);
     return def;
 }
 
@@ -167,6 +178,14 @@ static esp_err_t cmd_post(httpd_req_t *req)
         .gain_x1024   = qparam(req, "gain",      -1),
         .usb_push     = qparam(req, "usb",       -1),
         .save         = qparam(req, "save",       0) != 0,
+        .awb_en       = qparam(req, "awb",       -1),
+        .wb_r         = qparamf(req, "wb_r",   -1.0f),
+        .wb_b         = qparamf(req, "wb_b",   -1.0f),
+        .black_level  = qparam(req, "bl",        -1),
+        .set_ccm      = qparamf(req, "ccm0", -999.0f) > -900.0f,
+        .ccm = { qparamf(req,"ccm0",0), qparamf(req,"ccm1",0), qparamf(req,"ccm2",0),
+                 qparamf(req,"ccm3",0), qparamf(req,"ccm4",0), qparamf(req,"ccm5",0),
+                 qparamf(req,"ccm6",0), qparamf(req,"ccm7",0), qparamf(req,"ccm8",0) },
         .sstv_trigger = qparam(req, "sstv",       0) != 0,
         .capture_hd   = qparam(req, "capture",    0) != 0,
     };

@@ -38,6 +38,8 @@ typedef struct {
     bool     thermal_ok;
     uint32_t heap_free, heap_min, psram_free;  /* system health (bytes)     */
     int      reset_reason;                      /* esp_reset_reason()        */
+    uint32_t focus;                             /* preview sharpness aid      */
+    bool     awb_enabled;
 } ground_tlm_t;
 
 /* Command mailbox: server sets fields, app applies + clears once per frame.
@@ -49,6 +51,11 @@ typedef struct {
     int  gain_x1024;    /* >=0: set total gain (1024=1x)      */
     int  usb_push;      /* 0/1: disable/enable legacy USB push; <0 no change */
     bool save;          /* one-shot: persist current settings to NVS */
+    int   awb_en;       /* 0/1: gray-world AWB; <0 no change   */
+    float wb_r, wb_b;   /* manual WB gains; <=0 no change      */
+    int   black_level;  /* >=0: set black level; <0 no change  */
+    float ccm[9];       /* row-major 3x3 colour matrix, applied iff set_ccm */
+    bool  set_ccm;
     bool sstv_trigger;  /* one-shot: kick an SSTV TX          */
     bool capture_hd;    /* one-shot: latch a full-res HD frame */
 } ground_cmd_t;

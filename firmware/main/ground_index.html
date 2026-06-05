@@ -61,6 +61,7 @@
       <span>free heap</span><span id="t_heap">–</span>
       <span>free PSRAM</span><span id="t_psram">–</span>
       <span>last reset</span><span id="t_reset">–</span>
+      <span>focus</span><span id="t_focus">–</span>
     </div>
   </section>
 
@@ -79,6 +80,23 @@
     <a href="/capture.raw" download><button class="alt">Download HD</button></a>
     <button class="alt" onclick="cmd('save=1')">Save settings</button>
     <button class="alt" onclick="if(confirm('Reboot the board?'))cmd('reboot=1')">Reboot</button>
+  </section>
+
+  <section class="card">
+    <h2>Image tuning</h2>
+    <div class="row"><label><input type="checkbox" id="awb" checked onchange="cmd('awb='+(this.checked?1:0))"> auto white balance (gray-world)</label></div>
+    <div class="row"><label>WB R</label><input type="number" step="0.01" id="wbr" value="1.60">
+      <label>B</label><input type="number" step="0.01" id="wbb" value="3.00">
+      <button onclick="cmd('awb=0&wb_r='+v('wbr')+'&wb_b='+v('wbb'))">Set WB (AWB off)</button></div>
+    <div class="row"><label>black level</label><input type="number" id="bl" value="16">
+      <button onclick="cmd('bl='+v('bl'))">Set</button></div>
+    <div class="row"><label>CCM (3×3, row-major) — sensor RGB → sRGB</label></div>
+    <div style="display:grid;grid-template-columns:repeat(3,76px);gap:4px;margin:4px 0;">
+      <input type="number" step="0.01" id="c0" value="1.40"><input type="number" step="0.01" id="c1" value="-0.28"><input type="number" step="0.01" id="c2" value="-0.12">
+      <input type="number" step="0.01" id="c3" value="-0.22"><input type="number" step="0.01" id="c4" value="1.42"><input type="number" step="0.01" id="c5" value="-0.20">
+      <input type="number" step="0.01" id="c6" value="-0.05"><input type="number" step="0.01" id="c7" value="-0.35"><input type="number" step="0.01" id="c8" value="1.40">
+    </div>
+    <button onclick="cmd('ccm0='+v('c0')+'&ccm1='+v('c1')+'&ccm2='+v('c2')+'&ccm3='+v('c3')+'&ccm4='+v('c4')+'&ccm5='+v('c5')+'&ccm6='+v('c6')+'&ccm7='+v('c7')+'&ccm8='+v('c8'))">Apply CCM</button>
   </section>
 
   <section class="card">
@@ -124,6 +142,8 @@ async function poll(){
     $('t_heap').textContent = (t.heap/1024|0)+' KB (min '+(t.heap_min/1024|0)+')';
     $('t_psram').textContent = (t.psram/1024/1024).toFixed(2)+' MB';
     $('t_reset').textContent = RST[t.reset] || ('#'+t.reset);
+    $('t_focus').textContent = t.focus;
+    if ($('awb')) $('awb').checked = !!t.awb;
     if (!$('ae_target').matches(':focus')) $('ae_target').value = t.ae_target;
     $('ae_en').checked = !!t.ae_en;
   } catch(e){ $('status').firstChild.textContent = 'disconnected — retrying… '; }

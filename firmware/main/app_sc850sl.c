@@ -287,6 +287,12 @@ static float g_ccm[3][3] = {
     {-0.05f, -0.35f,  1.40f },
 };
 
+/* Web-tunable color controls. When g_awb_enabled is off, the gray-world update
+ * is skipped and the manual g_wb_r/g_wb_b set from the web hold. g_focus is a
+ * focus aid: mean green-channel gradient of the preview (higher = sharper). */
+static bool     g_awb_enabled = true;
+static uint32_t g_focus       = 0;
+
 /* ---- USB live-preview stream ---- *
  *
  * Every ~2 s, downscale the latest captured frame to 320×240 RGB565 and
@@ -1285,6 +1291,17 @@ static void usb_stream_send(int cycle)
             }
             if (gc.usb_push >= 0) g_usb_push = (gc.usb_push != 0);
             if (gc.save)          ground_settings_save();
+            /* Live image tuning (color). Manual WB needs AWB off or gray-world
+             * overwrites it next frame. */
+            if (gc.awb_en >= 0)      g_awb_enabled = (gc.awb_en != 0);
+            if (gc.wb_r > 0.0f)      g_wb_r = gc.wb_r;
+            if (gc.wb_b > 0.0f)      g_wb_b = gc.wb_b;
+            if (gc.black_level >= 0) g_black_level = gc.black_level;
+            if (gc.set_ccm) {
+                g_ccm[0][0]=gc.ccm[0]; g_ccm[0][1]=gc.ccm[1]; g_ccm[0][2]=gc.ccm[2];
+                g_ccm[1][0]=gc.ccm[3]; g_ccm[1][1]=gc.ccm[4]; g_ccm[1][2]=gc.ccm[5];
+                g_ccm[2][0]=gc.ccm[6]; g_ccm[2][1]=gc.ccm[7]; g_ccm[2][2]=gc.ccm[8];
+            }
             /* gc.sstv_trigger / gc.capture_hd are handled in P4. */
         }
     }
@@ -1379,6 +1396,7 @@ static void usb_stream_send(int cycle)
             .heap_min   = (uint32_t)esp_get_minimum_free_heap_size(),
             .psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
             .reset_reason = (int)esp_reset_reason(),
+            .focus = g_focus, .awb_enabled = g_awb_enabled,
         };
         ground_publish_tlm(&tlm);
     }
@@ -1490,6 +1508,7 @@ static void downscale_raw10_bggr_to_rgb565(const uint8_t *src, int sw, int sh,
                                            int dst_stride)
 {
     if (!g_gamma_ready) gamma_lut_init();
+    uint64_t focus_acc = 0; int prev_g = 0;   /* focus-aid: green-gradient accumulator */
     const int src_row_bytes = (sw * 10) / 8;
     /* Frame-wide channel accumulators for next-frame gray-world AWB. */
     uint64_t fr = 0, fg = 0, fb = 0;
@@ -1572,6 +1591,10 @@ static void downscale_raw10_bggr_to_rgb565(const uint8_t *src, int sw, int sh,
             if (ig > 255) ig = 255;
             if (ib > 255) ib = 255;
 
+            /* Focus aid: accumulate green-channel gradient (sharpness). */
+            focus_acc += (uint32_t)(ig > prev_g ? ig - prev_g : prev_g - ig);
+            prev_g = ig;
+
             /* (4) Gamma encode LAST, on the CCM output (so CCM operated on
              * linear light), then pack to RGB565. */
             uint8_t r = g_gamma_lut[ir];
@@ -1582,8 +1605,9 @@ static void downscale_raw10_bggr_to_rgb565(const uint8_t *src, int sw, int sh,
     }
 
     /* Gray-world update for the NEXT frame: drive channel means together
-     * (green = reference). Clamp to a sane range and IIR-smooth. */
-    if (fr > 0 && fb > 0 && fg > 0) {
+     * (green = reference). Clamp to a sane range and IIR-smooth. Skipped when
+     * AWB is disabled, so the web-set manual g_wb_r/g_wb_b hold. */
+    if (g_awb_enabled && fr > 0 && fb > 0 && fg > 0) {
         float gr = (float)fg / (float)fr;
         float gb = (float)fg / (float)fb;
         if (gr < 0.5f) gr = 0.5f;
@@ -1593,6 +1617,7 @@ static void downscale_raw10_bggr_to_rgb565(const uint8_t *src, int sw, int sh,
         g_wb_r = g_wb_r * 0.7f + gr * 0.3f;
         g_wb_b = g_wb_b * 0.7f + gb * 0.3f;
     }
+    g_focus = (dw > 0 && dh > 0) ? (uint32_t)(focus_acc / ((uint64_t)dw * dh)) : 0;
 }
 
 /* ---------------------------------------------------------------- *
