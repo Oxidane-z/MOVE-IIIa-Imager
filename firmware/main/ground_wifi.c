@@ -24,6 +24,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "ground_station.h"   /* ground_http_start() */
+#include "mdns.h"             /* <hostname>.local discovery */
 
 static const char *TAG = "ground/wifi";
 
@@ -85,7 +86,16 @@ esp_err_t ground_wifi_start(void)
     ESP_ERROR_CHECK(esp_netif_init());
     r = esp_event_loop_create_default();
     if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(r);
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
+    if (sta) esp_netif_set_hostname(sta, CONFIG_GROUND_WIFI_HOSTNAME);  /* DHCP name */
+
+    /* mDNS: reachable at http://CONFIG_GROUND_WIFI_HOSTNAME.local/ without
+     * needing the DHCP-assigned IP. Advertise the HTTP service too. */
+    if (mdns_init() == ESP_OK) {
+        mdns_hostname_set(CONFIG_GROUND_WIFI_HOSTNAME);
+        mdns_instance_name_set("MOVE-IIIa Imager");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    }
 
     /* esp_wifi_init() transparently brings up the C6 over SDIO through
      * esp_wifi_remote + esp_hosted (pins set by CONFIG_ESP_HOSTED_SDIO_* in

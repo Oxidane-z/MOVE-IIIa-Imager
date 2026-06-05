@@ -217,6 +217,14 @@ config GROUND_WIFI_MAX_RETRY
         How many times to retry esp_wifi_connect() on a disconnect
         before a longer backoff sleep. Ground convenience only.
 
+config GROUND_WIFI_HOSTNAME
+    string "Hostname (DHCP + mDNS: <name>.local)"
+    default "move-imager"
+    help
+        Advertised over DHCP (shows in the router's client list) and mDNS,
+        so the board is reachable at http://<name>.local/ without having to
+        find its IP address. Keep it short, lowercase, no spaces.
+
 endif  # GROUND_WIFI_ENABLE
 
 endmenu

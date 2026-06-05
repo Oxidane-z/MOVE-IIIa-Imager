@@ -229,6 +229,15 @@ static uint32_t g_ae_gain_x1024 = SC850SL_GAIN_UNITY;  /* current gain, 1024 = 1
  * the flight build (nothing writes them there). */
 static int  g_ae_target  = AE_TARGET_RAW;
 static bool g_ae_enabled = true;
+/* Legacy USB binary preview push. Defaults OFF on the WiFi build (the web
+ * /stream replaces it and pushing floods the USB console + costs ~360 ms I/O
+ * per frame); ON for the bench build that uses the host Python viewer. The
+ * web UI can toggle it at runtime. */
+#if CONFIG_GROUND_WIFI_ENABLE
+static bool g_usb_push = false;
+#else
+static bool g_usb_push = true;
+#endif
 
 /* Gray-world AWB per-channel gains (green normalized to 1.0), updated
  * each frame in the demosaic. Declared here so usb_stream_send can log
@@ -1236,62 +1245,69 @@ static void usb_stream_send(int cycle)
                 if (gc.gain_x1024 >= 0) g_ae_gain_x1024 = (uint32_t)gc.gain_x1024;
                 sc850sl_set_exp_gain(g_ae_exp_lines, g_ae_gain_x1024);
             }
+            if (gc.usb_push >= 0) g_usb_push = (gc.usb_push != 0);
             /* gc.sstv_trigger / gc.capture_hd are handled in P4. */
         }
     }
 #endif
     if ((cycle % 4) == 0) ae_step(raw_mean, raw_sat_ppm);
 
-    /* Composite layout: RGB visible (left pane) | thermal (right pane).
-     * Both panes are USB_PANE_W × USB_PANE_H inside a USB_STREAM_W-wide
-     * buffer, so each renderer writes with dst_stride = USB_STREAM_W. */
+    /* Render the composite preview (RGB | thermal) ONLY when something will
+     * consume it: a web /stream client, or the legacy USB push. Otherwise skip
+     * the expensive software-ISP downscale entirely and keep just telemetry +
+     * AE alive on the cheap raw-stats scan above — an idle board (no viewer)
+     * then spends almost no CPU here, freeing it for comms/OTA/reliability. */
+    int64_t   t_ds0 = 0, t_ds1 = 0, t_usb0 = 0, t_usb1 = 0;
+    esp_err_t tr = ESP_ERR_INVALID_STATE;   /* thermal status; "none" unless rendered */
+    size_t    n  = 0;                        /* USB bytes written */
+    bool want_preview = g_usb_push;
+#if CONFIG_GROUND_WIFI_ENABLE
+    if (ground_preview_clients() > 0) want_preview = true;
+#endif
 
-    /* LEFT pane: RGB. g_capture_buf is RAW10 Bayer (RGGB); demosaic +
-     * box-filter + AWB + gamma straight into the left half. This call IS the
-     * "software ISP" whose per-frame cost we're timing (t_ds1 - t_ds0). */
-    int64_t t_ds0 = esp_timer_get_time();
-    downscale_raw10_bggr_to_rgb565((const uint8_t *)g_capture_buf,
-                                   CAPTURE_W, CAPTURE_H,
-                                   g_usb_stream_buf,            /* left pane @ x=0 */
-                                   USB_PANE_W, USB_PANE_H,
-                                   USB_STREAM_W);
-    int64_t t_ds1 = esp_timer_get_time();
+    if (want_preview) {
+        /* LEFT pane: RGB. demosaic + box-filter + AWB + gamma — the "software
+         * ISP" whose per-frame cost we time as t_ds1 - t_ds0. */
+        t_ds0 = esp_timer_get_time();
+        downscale_raw10_bggr_to_rgb565((const uint8_t *)g_capture_buf,
+                                       CAPTURE_W, CAPTURE_H, g_usb_stream_buf,
+                                       USB_PANE_W, USB_PANE_H, USB_STREAM_W);
+        t_ds1 = esp_timer_get_time();
 
-    /* RIGHT pane: thermal. Capture an MI1602 frame, false-color + scale
-     * into the right half. If the IR module isn't present / a capture
-     * fails, paint the pane dark so the composite still streams. */
-    uint16_t *thermal_pane = g_usb_stream_buf + USB_PANE_W;    /* right pane @ x=PANE_W */
-    esp_err_t tr = mi1602_aux_capture_rgb565(thermal_pane,
-                                             USB_PANE_W, USB_PANE_H,
-                                             USB_STREAM_W);
-    if (tr != ESP_OK) {
-        for (int y = 0; y < USB_PANE_H; ++y) {
-            uint16_t *row = thermal_pane + (size_t)y * USB_STREAM_W;
-            for (int x = 0; x < USB_PANE_W; ++x) row[x] = 0x0000;  /* black */
+        /* RIGHT pane: thermal (black if the MI1602 isn't present). */
+        uint16_t *thermal_pane = g_usb_stream_buf + USB_PANE_W;
+        tr = mi1602_aux_capture_rgb565(thermal_pane, USB_PANE_W, USB_PANE_H, USB_STREAM_W);
+        if (tr != ESP_OK) {
+            for (int y = 0; y < USB_PANE_H; ++y) {
+                uint16_t *row = thermal_pane + (size_t)y * USB_STREAM_W;
+                for (int x = 0; x < USB_PANE_W; ++x) row[x] = 0x0000;  /* black */
+            }
         }
+
+        /* Legacy USB binary push (host Python viewer). Atomic header+frame in
+         * one fwrite so ESP_LOGx can't interleave mid-frame. */
+        if (g_usb_push) {
+            uint8_t *H = g_frame_buf;
+            memcpy(H, USB_STREAM_MAGIC, sizeof(USB_STREAM_MAGIC));
+            put_u16le(H + 8,  USB_STREAM_W);
+            put_u16le(H + 10, USB_STREAM_H);
+            put_u16le(H + 12, (uint16_t)raw_min);
+            put_u16le(H + 14, (uint16_t)raw_max);
+            put_u16le(H + 16, (uint16_t)raw_mean);
+            put_u16le(H + 18, (uint16_t)g_black_level);
+            put_u16le(H + 20, (uint16_t)(g_wb_r * 256.0f + 0.5f));
+            put_u16le(H + 22, (uint16_t)(g_wb_b * 256.0f + 0.5f));
+            t_usb0 = esp_timer_get_time();
+            n = fwrite(g_frame_buf, 1, USB_FRAME_TOTAL, stdout);
+            fflush(stdout);
+            t_usb1 = esp_timer_get_time();
+        }
+
+#if CONFIG_GROUND_WIFI_ENABLE
+        ground_publish_preview(g_usb_stream_buf, USB_STREAM_BYTES,
+                               USB_STREAM_W, USB_STREAM_H);
+#endif
     }
-
-    /* Build the per-frame header in-place at the front of g_frame_buf. The
-     * pixels are already rendered into the payload region and the trailer
-     * sentinel was written once at init, so the buffer is a complete frame.
-     * Push it with a SINGLE fwrite: newlib holds the stdout file lock for the
-     * whole call, making the frame atomic against any other task's ESP_LOGx
-     * (that mid-frame interleaving was the smear / false-colour-stripe cause). */
-    uint8_t *H = g_frame_buf;
-    memcpy(H, USB_STREAM_MAGIC, sizeof(USB_STREAM_MAGIC));
-    put_u16le(H + 8,  USB_STREAM_W);
-    put_u16le(H + 10, USB_STREAM_H);
-    put_u16le(H + 12, (uint16_t)raw_min);
-    put_u16le(H + 14, (uint16_t)raw_max);
-    put_u16le(H + 16, (uint16_t)raw_mean);
-    put_u16le(H + 18, (uint16_t)g_black_level);
-    put_u16le(H + 20, (uint16_t)(g_wb_r * 256.0f + 0.5f));
-    put_u16le(H + 22, (uint16_t)(g_wb_b * 256.0f + 0.5f));
-
-    int64_t t_usb0 = esp_timer_get_time();
-    size_t n = fwrite(g_frame_buf, 1, USB_FRAME_TOTAL, stdout);
-    fflush(stdout);
-    int64_t t_usb1 = esp_timer_get_time();
 
     /* Throttled summary (1/30 frames). It lands in the gap AFTER a frame's
      * trailer and BEFORE the next magic, so the host's magic search skips it
@@ -1322,8 +1338,6 @@ static void usb_stream_send(int cycle)
             .cam_streaming = g_cam_ready, .thermal_ok = (tr == ESP_OK),
         };
         ground_publish_tlm(&tlm);
-        ground_publish_preview(g_usb_stream_buf, USB_STREAM_BYTES,
-                               USB_STREAM_W, USB_STREAM_H);
     }
 #endif
 }

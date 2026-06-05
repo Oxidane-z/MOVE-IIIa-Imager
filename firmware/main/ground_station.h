@@ -45,6 +45,7 @@ typedef struct {
     int  ae_enabled;    /* 0/1: disable/enable AE; <0 no change */
     int  exp_lines;     /* >=0: set exposure (lines)          */
     int  gain_x1024;    /* >=0: set total gain (1024=1x)      */
+    int  usb_push;      /* 0/1: disable/enable legacy USB push; <0 no change */
     bool sstv_trigger;  /* one-shot: kick an SSTV TX          */
     bool capture_hd;    /* one-shot: latch a full-res HD frame */
 } ground_cmd_t;
@@ -63,6 +64,9 @@ bool   ground_cmd_take(ground_cmd_t *out);
 bool   ground_tlm_snapshot(ground_tlm_t *out);
 size_t ground_preview_copy(void *dst, size_t maxbytes, uint16_t *w, uint16_t *h);
 void   ground_cmd_post(const ground_cmd_t *cmd);
+/* Active /stream (MJPEG) client count; the camera task uses it to skip the
+ * software-ISP render when nobody is watching. */
+int    ground_preview_clients(void);
 
 /* Start the web server. Call once the station has an IP; idempotent. */
 esp_err_t ground_http_start(void);

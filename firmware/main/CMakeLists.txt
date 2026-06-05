@@ -40,6 +40,8 @@ set(requires
                       # Kconfig-gated either, so list it unconditionally.
                       # ground_http.c is #if'd out in flight, so its code (and
                       # lwIP's) dead-strips away there.
+    esp_driver_jpeg   # hardware JPEG encoder for the live-preview MJPEG stream
+                      # (ground_http.c). Same unconditional-require rationale.
     nvs_flash         # NVS init for the (ground-only) WiFi stack; inert in flight.
 )
 

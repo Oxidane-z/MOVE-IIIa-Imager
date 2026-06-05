@@ -45,6 +45,12 @@ dependencies:
     version: "*"
     rules:
       - if: "$CONFIG{GROUND_WIFI_ENABLE} == True"
+  # mDNS so the board answers at <hostname>.local. Registry component in IDF v6
+  # (moved out of the core), so it gates cleanly here.
+  espressif/mdns:
+    version: "^1.5"
+    rules:
+      - if: "$CONFIG{GROUND_WIFI_ENABLE} == True"
 
   # esp_video / esp_cam_sensor are NOT pulled in for the SC850SL build.
   # esp_video v1.0 doesn't compile against IDF v6.0.1 (API breakage on
