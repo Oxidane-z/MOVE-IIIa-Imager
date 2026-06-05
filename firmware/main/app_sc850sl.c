@@ -58,6 +58,9 @@
 #include "sstv_robot36.h"
 #include "ground_wifi.h"   /* ground-test WiFi + web control (no-op in flight) */
 #include "ground_station.h" /* telemetry/command interface to the web server */
+#include "esp_system.h"     /* esp_reset_reason / esp_get_free_heap_size (telemetry) */
+#include "nvs_flash.h"      /* NVS init for persisted ground settings */
+#include "nvs.h"
 #include "test_image.h"      /* 320×240 RGB565 fallback test pattern */
 
 static const char *TAG = "app/sc850sl";
@@ -1167,6 +1170,41 @@ static esp_err_t camera_capture_frame(uint16_t *out_rgb565)
     return ESP_OK;
 }
 
+#if CONFIG_GROUND_WIFI_ENABLE
+/* ---- persisted ground settings (NVS, namespace "ground") --------------- *
+ * Survive reboots so a tuned exposure/AE/USB-push config sticks. Loaded once
+ * at boot (overriding the compile-time defaults), saved on /api/cmd?save=1. */
+#define GROUND_NVS_NS "ground"
+static void ground_settings_load(void)
+{
+    nvs_handle_t nv;
+    if (nvs_open(GROUND_NVS_NS, NVS_READONLY, &nv) != ESP_OK) return;  /* none yet */
+    int32_t i; uint8_t b; uint32_t u;
+    if (nvs_get_i32(nv, "ae_target", &i) == ESP_OK) g_ae_target     = i;
+    if (nvs_get_u8 (nv, "ae_en", &b)     == ESP_OK) g_ae_enabled    = (b != 0);
+    if (nvs_get_u32(nv, "exp", &u)       == ESP_OK) g_ae_exp_lines  = u;
+    if (nvs_get_u32(nv, "gain", &u)      == ESP_OK) g_ae_gain_x1024 = u;
+    if (nvs_get_u8 (nv, "usb", &b)       == ESP_OK) g_usb_push      = (b != 0);
+    nvs_close(nv);
+    ESP_LOGI(TAG, "NVS: loaded ae_target=%d ae_en=%d exp=%u gain=%u usb=%d",
+             g_ae_target, g_ae_enabled, (unsigned)g_ae_exp_lines,
+             (unsigned)g_ae_gain_x1024, g_usb_push);
+}
+static void ground_settings_save(void)
+{
+    nvs_handle_t nv;
+    if (nvs_open(GROUND_NVS_NS, NVS_READWRITE, &nv) != ESP_OK) { ESP_LOGW(TAG, "NVS open failed"); return; }
+    nvs_set_i32(nv, "ae_target", g_ae_target);
+    nvs_set_u8 (nv, "ae_en", g_ae_enabled ? 1 : 0);
+    nvs_set_u32(nv, "exp", g_ae_exp_lines);
+    nvs_set_u32(nv, "gain", g_ae_gain_x1024);
+    nvs_set_u8 (nv, "usb", g_usb_push ? 1 : 0);
+    esp_err_t r = nvs_commit(nv);
+    nvs_close(nv);
+    ESP_LOGI(TAG, "NVS: saved settings (%s)", esp_err_to_name(r));
+}
+#endif /* CONFIG_GROUND_WIFI_ENABLE */
+
 /* Push one captured frame out the USB-Serial-JTAG CDC channel for live
  * host-side viewing. Uses a small magic prefix so a Python decoder can
  * locate frames in the byte stream regardless of interleaved ESP_LOGx
@@ -1246,6 +1284,7 @@ static void usb_stream_send(int cycle)
                 sc850sl_set_exp_gain(g_ae_exp_lines, g_ae_gain_x1024);
             }
             if (gc.usb_push >= 0) g_usb_push = (gc.usb_push != 0);
+            if (gc.save)          ground_settings_save();
             /* gc.sstv_trigger / gc.capture_hd are handled in P4. */
         }
     }
@@ -1336,6 +1375,10 @@ static void usb_stream_send(int cycle)
             .t_cap_us = t_cap1 - t_cap0, .t_isp_us = t_ds1 - t_ds0,
             .t_usb_us = t_usb1 - t_usb0,
             .cam_streaming = g_cam_ready, .thermal_ok = (tr == ESP_OK),
+            .heap_free  = (uint32_t)esp_get_free_heap_size(),
+            .heap_min   = (uint32_t)esp_get_minimum_free_heap_size(),
+            .psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+            .reset_reason = (int)esp_reset_reason(),
         };
         ground_publish_tlm(&tlm);
     }
@@ -1675,6 +1718,20 @@ void app_run(void)
         ESP_LOGE(TAG, "PSRAM alloc for audio/sstv/stream buffers failed");
         goto idle;
     }
+
+#if CONFIG_GROUND_WIFI_ENABLE
+    /* NVS init + load persisted ground settings BEFORE the camera primes
+     * exposure below, so a saved AE/exposure config takes effect from boot.
+     * (ground_wifi_start() also calls nvs_flash_init() later; it's idempotent.) */
+    {
+        esp_err_t e = nvs_flash_init();
+        if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            nvs_flash_init();
+        }
+    }
+    ground_settings_load();
+#endif
 
     /* ---- I²C + sensor bring-up ---- */
     i2c_master_bus_handle_t bus = i2c_bus_open();

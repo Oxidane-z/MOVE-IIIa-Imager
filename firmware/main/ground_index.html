@@ -58,6 +58,9 @@
       <span>WB R / B</span><span id="t_wb">–</span>
       <span>cap / isp / usb</span><span id="t_time">–</span>
       <span>uptime</span><span id="t_up">–</span>
+      <span>free heap</span><span id="t_heap">–</span>
+      <span>free PSRAM</span><span id="t_psram">–</span>
+      <span>last reset</span><span id="t_reset">–</span>
     </div>
   </section>
 
@@ -74,6 +77,8 @@
     <button class="alt" onclick="cmd('capture=1')">Capture HD</button>
     <button class="alt" onclick="cmd('sstv=1')">SSTV TX</button>
     <a href="/capture.raw" download><button class="alt">Download HD</button></a>
+    <button class="alt" onclick="cmd('save=1')">Save settings</button>
+    <button class="alt" onclick="if(confirm('Reboot the board?'))cmd('reboot=1')">Reboot</button>
   </section>
 
   <section class="card">
@@ -90,6 +95,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const RST = {1:'power-on',2:'ext',3:'sw',4:'PANIC',5:'int-wdt',6:'task-wdt',7:'wdt',8:'deepsleep',9:'BROWNOUT',11:'usb'};
 const v = id => $(id).value;
 function fmtUp(s){ s=+s; const h=s/3600|0,m=s/60%60|0; return (h?h+'h ':'')+m+'m '+(s%60|0)+'s'; }
 
@@ -115,6 +121,9 @@ async function poll(){
     $('t_wb').textContent = t.wbr.toFixed(2)+' / '+t.wbb.toFixed(2);
     $('t_time').textContent = (t.cap_us/1000|0)+' / '+(t.isp_us/1000|0)+' / '+(t.usb_us/1000|0)+' ms';
     $('t_up').textContent = fmtUp(t.up);
+    $('t_heap').textContent = (t.heap/1024|0)+' KB (min '+(t.heap_min/1024|0)+')';
+    $('t_psram').textContent = (t.psram/1024/1024).toFixed(2)+' MB';
+    $('t_reset').textContent = RST[t.reset] || ('#'+t.reset);
     if (!$('ae_target').matches(':focus')) $('ae_target').value = t.ae_target;
     $('ae_en').checked = !!t.ae_en;
   } catch(e){ $('status').firstChild.textContent = 'disconnected — retrying… '; }

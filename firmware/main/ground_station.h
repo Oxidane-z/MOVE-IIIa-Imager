@@ -36,6 +36,8 @@ typedef struct {
     int64_t  t_cap_us, t_isp_us, t_usb_us;  /* per-stage frame timings      */
     bool     cam_streaming;
     bool     thermal_ok;
+    uint32_t heap_free, heap_min, psram_free;  /* system health (bytes)     */
+    int      reset_reason;                      /* esp_reset_reason()        */
 } ground_tlm_t;
 
 /* Command mailbox: server sets fields, app applies + clears once per frame.
@@ -46,6 +48,7 @@ typedef struct {
     int  exp_lines;     /* >=0: set exposure (lines)          */
     int  gain_x1024;    /* >=0: set total gain (1024=1x)      */
     int  usb_push;      /* 0/1: disable/enable legacy USB push; <0 no change */
+    bool save;          /* one-shot: persist current settings to NVS */
     bool sstv_trigger;  /* one-shot: kick an SSTV TX          */
     bool capture_hd;    /* one-shot: latch a full-res HD frame */
 } ground_cmd_t;

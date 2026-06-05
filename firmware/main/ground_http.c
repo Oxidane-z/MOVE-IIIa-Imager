@@ -125,14 +125,16 @@ static esp_err_t tlm_get(httpd_req_t *req)
         "\"seq\":%u,\"w\":%u,\"h\":%u,\"min\":%d,\"max\":%d,\"mean\":%d,\"sat_ppm\":%d,"
         "\"exp\":%u,\"gain\":%u,\"bl\":%d,\"wbr\":%.2f,\"wbb\":%.2f,"
         "\"ae_target\":%d,\"ae_en\":%d,\"cap_us\":%lld,\"isp_us\":%lld,\"usb_us\":%lld,"
-        "\"stream\":%d,\"thermal\":%d}",
+        "\"stream\":%d,\"thermal\":%d,"
+        "\"heap\":%u,\"heap_min\":%u,\"psram\":%u,\"reset\":%d}",
         v ? 1 : 0, ip, rssi, (long long)(esp_timer_get_time() / 1000000),
         (unsigned)t.seq, (unsigned)t.w, (unsigned)t.h,
         t.raw_min, t.raw_max, t.raw_mean, t.raw_sat_ppm,
         (unsigned)t.exp_lines, (unsigned)t.gain_x1024, t.black_level, t.wb_r, t.wb_b,
         t.ae_target, t.ae_enabled ? 1 : 0,
         (long long)t.t_cap_us, (long long)t.t_isp_us, (long long)t.t_usb_us,
-        t.cam_streaming ? 1 : 0, t.thermal_ok ? 1 : 0);
+        t.cam_streaming ? 1 : 0, t.thermal_ok ? 1 : 0,
+        (unsigned)t.heap_free, (unsigned)t.heap_min, (unsigned)t.psram_free, t.reset_reason);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
@@ -147,14 +149,24 @@ static int qparam(httpd_req_t *req, const char *key, int def)
     return def;
 }
 
+/* Forward decl: the reboot task is defined in the OTA section below. */
+static void ota_reboot_task(void *a);
+
 static esp_err_t cmd_post(httpd_req_t *req)
 {
+    if (qparam(req, "reboot", 0)) {                 /* handled here, not via mailbox */
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":1,\"reboot\":1}");
+        xTaskCreate(ota_reboot_task, "reboot", 2048, NULL, 6, NULL);
+        return ESP_OK;
+    }
     ground_cmd_t c = {
         .ae_target    = qparam(req, "ae_target", -1),
         .ae_enabled   = qparam(req, "ae_en",     -1),
         .exp_lines    = qparam(req, "exp",       -1),
         .gain_x1024   = qparam(req, "gain",      -1),
         .usb_push     = qparam(req, "usb",       -1),
+        .save         = qparam(req, "save",       0) != 0,
         .sstv_trigger = qparam(req, "sstv",       0) != 0,
         .capture_hd   = qparam(req, "capture",    0) != 0,
     };
