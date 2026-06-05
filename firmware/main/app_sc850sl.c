@@ -57,6 +57,7 @@
 #include "sc850sl.h"
 #include "sstv_robot36.h"
 #include "ground_wifi.h"   /* ground-test WiFi + web control (no-op in flight) */
+#include "ground_station.h" /* telemetry/command interface to the web server */
 #include "test_image.h"      /* 320×240 RGB565 fallback test pattern */
 
 static const char *TAG = "app/sc850sl";
@@ -223,6 +224,11 @@ static int g_antiflicker_hz = 50;   /* 0 = off, 50, or 60 */
 
 static uint32_t g_ae_exp_lines  = 676;                 /* current exposure (lines), ~20 ms */
 static uint32_t g_ae_gain_x1024 = SC850SL_GAIN_UNITY;  /* current gain, 1024 = 1.0x */
+/* Web-tunable AE setpoint + enable. Default to the compile-time target; the
+ * ground web UI can retune the target or drop to manual exposure. Constant in
+ * the flight build (nothing writes them there). */
+static int  g_ae_target  = AE_TARGET_RAW;
+static bool g_ae_enabled = true;
 
 /* Gray-world AWB per-channel gains (green normalized to 1.0), updated
  * each frame in the demosaic. Declared here so usb_stream_send can log
@@ -968,6 +974,7 @@ static void sc850sl_set_exp_gain(uint32_t lines, uint32_t gain_x1024)
  * the boot 0x3e03=0x0b write (see task #22). */
 static void ae_step(int raw_mean, int sat_ppm)
 {
+    if (!g_ae_enabled) return;                        /* manual exposure mode */
     if (raw_mean < 2) return;                         /* no signal yet */
 
     /* Highlight guard (daytime overexposure fix), highest priority. If too
@@ -991,10 +998,10 @@ static void ae_step(int raw_mean, int sat_ppm)
         return;
     }
 
-    int err = AE_TARGET_RAW - raw_mean;
+    int err = g_ae_target - raw_mean;
     if (err > -AE_DEAD_RAW && err < AE_DEAD_RAW) return;   /* close enough */
 
-    float ratio = (float)AE_TARGET_RAW / (float)raw_mean;
+    float ratio = (float)g_ae_target / (float)raw_mean;
     if (ratio > 2.0f) ratio = 2.0f;                   /* clamp per-step change */
     if (ratio < 0.5f) ratio = 0.5f;
 
@@ -1216,6 +1223,23 @@ static void usb_stream_send(int cycle)
      * doesn't change fast, and it bounds the per-frame I2C write load on the
      * flaky SC850SL bus (which, hammered every frame, was stalling and
      * watchdog-resetting the board). */
+#if CONFIG_GROUND_WIFI_ENABLE
+    /* Apply any pending web-control command (ground-test only) before AE runs,
+     * so a manual exposure/gain or AE-target change takes effect this frame. */
+    {
+        ground_cmd_t gc;
+        if (ground_cmd_take(&gc)) {
+            if (gc.ae_target  >= 0) g_ae_target  = gc.ae_target;
+            if (gc.ae_enabled >= 0) g_ae_enabled = (gc.ae_enabled != 0);
+            if (gc.exp_lines >= 0 || gc.gain_x1024 >= 0) {
+                if (gc.exp_lines  >= 0) g_ae_exp_lines  = (uint32_t)gc.exp_lines;
+                if (gc.gain_x1024 >= 0) g_ae_gain_x1024 = (uint32_t)gc.gain_x1024;
+                sc850sl_set_exp_gain(g_ae_exp_lines, g_ae_gain_x1024);
+            }
+            /* gc.sstv_trigger / gc.capture_hd are handled in P4. */
+        }
+    }
+#endif
     if ((cycle % 4) == 0) ae_step(raw_mean, raw_sat_ppm);
 
     /* Composite layout: RGB visible (left pane) | thermal (right pane).
@@ -1282,6 +1306,26 @@ static void usb_stream_send(int cycle)
                  (long long)(t_cap1 - t_cap0), (long long)(t_ds1 - t_ds0),
                  (long long)(t_usb1 - t_usb0));
     }
+
+#if CONFIG_GROUND_WIFI_ENABLE
+    /* Publish telemetry + the latest preview for the web ground station. */
+    {
+        ground_tlm_t tlm = {
+            .seq = (uint32_t)cycle, .w = USB_STREAM_W, .h = USB_STREAM_H,
+            .raw_min = raw_min, .raw_max = raw_max, .raw_mean = raw_mean,
+            .raw_sat_ppm = raw_sat_ppm,
+            .exp_lines = g_ae_exp_lines, .gain_x1024 = g_ae_gain_x1024,
+            .black_level = g_black_level, .wb_r = g_wb_r, .wb_b = g_wb_b,
+            .ae_target = g_ae_target, .ae_enabled = g_ae_enabled,
+            .t_cap_us = t_cap1 - t_cap0, .t_isp_us = t_ds1 - t_ds0,
+            .t_usb_us = t_usb1 - t_usb0,
+            .cam_streaming = g_cam_ready, .thermal_ok = (tr == ESP_OK),
+        };
+        ground_publish_tlm(&tlm);
+        ground_publish_preview(g_usb_stream_buf, USB_STREAM_BYTES,
+                               USB_STREAM_W, USB_STREAM_H);
+    }
+#endif
 }
 
 static void usb_stream_task(void *arg)

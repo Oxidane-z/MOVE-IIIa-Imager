@@ -23,6 +23,7 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "ground_station.h"   /* ground_http_start() */
 
 static const char *TAG = "ground/wifi";
 
@@ -42,6 +43,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_connected = true;
         ESP_LOGI(TAG, "got ip: %s   (web control: http://%s/ )", s_ip, s_ip);
+        /* Start the web control server now that we have an address. Idempotent
+         * (no-op if already running), so calling it on every got-ip is safe. */
+        ground_http_start();
     }
 }
 

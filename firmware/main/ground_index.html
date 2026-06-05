@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOVE-IIIa Imager — Ground Station</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:14px/1.4 system-ui,sans-serif; background:#11141a; color:#dfe3ea; }
+  header { padding:10px 16px; background:#0b0d12; border-bottom:1px solid #222; }
+  h1 { margin:0; font-size:16px; font-weight:600; }
+  #status { font-size:12px; color:#9aa3b2; margin-top:4px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#555; margin:0 2px 0 8px; vertical-align:middle; }
+  .dot.on { background:#39d353; } .dot.bad { background:#e5534b; }
+  main { display:flex; flex-wrap:wrap; gap:16px; padding:16px; }
+  .card { background:#171b22; border:1px solid #232936; border-radius:8px; padding:12px 14px; }
+  .card h2 { margin:0 0 8px; font-size:13px; color:#9aa3b2; text-transform:uppercase; letter-spacing:.04em; }
+  #preview { min-width:340px; } #prev { width:100%; max-width:640px; background:#000; border-radius:4px; display:block; }
+  #prevmsg { color:#9aa3b2; font-size:12px; padding:40px 8px; text-align:center; }
+  .grid { display:grid; grid-template-columns:auto auto; gap:2px 18px; font-variant-numeric:tabular-nums; }
+  .grid span:nth-child(odd) { color:#9aa3b2; }
+  .row { margin:6px 0; } label { color:#9aa3b2; margin-right:6px; }
+  input[type=number] { width:84px; background:#0b0d12; color:#dfe3ea; border:1px solid #2a3140; border-radius:4px; padding:4px 6px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:4px; padding:6px 12px; cursor:pointer; margin:2px; }
+  button.alt { background:#374151; } button:active { transform:translateY(1px); }
+  #log { background:#0b0d12; border:1px solid #232936; border-radius:4px; padding:8px; height:200px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.35 ui-monospace,monospace; color:#b8c0cc; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MOVE-IIIa Imager — Ground Station</h1>
+  <div id="status">
+    connecting…
+    <span>cam<span id="d_stream" class="dot"></span></span>
+    <span>thermal<span id="d_thermal" class="dot"></span></span>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="preview">
+    <h2>Live preview</h2>
+    <img id="prev" alt="preview">
+    <div id="prevmsg">preview offline (enable in P3)</div>
+    <div id="prevcap" style="font-size:12px;color:#9aa3b2;margin-top:6px;"></div>
+  </section>
+
+  <section class="card">
+    <h2>Telemetry</h2>
+    <div class="grid">
+      <span>frame</span><span id="t_seq">–</span>
+      <span>mean</span><span id="t_mean">–</span>
+      <span>min / max</span><span id="t_minmax">–</span>
+      <span>clipping</span><span id="t_sat">–</span>
+      <span>exposure</span><span id="t_exp">–</span>
+      <span>gain</span><span id="t_gain">–</span>
+      <span>black level</span><span id="t_bl">–</span>
+      <span>WB R / B</span><span id="t_wb">–</span>
+      <span>cap / isp / usb</span><span id="t_time">–</span>
+      <span>uptime</span><span id="t_up">–</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Auto-exposure</h2>
+    <div class="row"><label>target mean</label><input type="number" id="ae_target" min="2" max="250" value="90">
+      <button onclick="cmd('ae_target='+v('ae_target'))">Set</button></div>
+    <div class="row"><label><input type="checkbox" id="ae_en" checked onchange="cmd('ae_en='+(this.checked?1:0))"> AE enabled</label></div>
+    <h2 style="margin-top:14px;">Manual</h2>
+    <div class="row"><label>exp (lines)</label><input type="number" id="m_exp" min="2" max="2246" value="676"></div>
+    <div class="row"><label>gain x1024</label><input type="number" id="m_gain" min="1024" max="406320" value="1024">
+      <button onclick="cmd('ae_en=0&exp='+v('m_exp')+'&gain='+v('m_gain'))">Apply (AE off)</button></div>
+    <h2 style="margin-top:14px;">Actions</h2>
+    <button class="alt" onclick="cmd('capture=1')">Capture HD</button>
+    <button class="alt" onclick="cmd('sstv=1')">SSTV TX</button>
+    <a href="/capture.raw" download><button class="alt">Download HD</button></a>
+  </section>
+
+  <section class="card">
+    <h2>Firmware update (OTA)</h2>
+    <div class="row"><input type="file" id="fw" accept=".bin"> <button onclick="ota()">Upload &amp; reboot</button></div>
+    <div id="otamsg" style="font-size:12px;color:#9aa3b2;"></div>
+  </section>
+
+  <section class="card" style="flex:1 1 100%;">
+    <h2>Device log <button class="alt" style="font-size:11px;padding:2px 8px;" onclick="getlog()">refresh</button></h2>
+    <div id="log">—</div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const v = id => $(id).value;
+function fmtUp(s){ s=+s; const h=s/3600|0,m=s/60%60|0; return (h?h+'h ':'')+m+'m '+(s%60|0)+'s'; }
+
+async function cmd(qs){
+  try { await fetch('/api/cmd?'+qs, {method:'POST'}); } catch(e){}
+  setTimeout(poll, 150);
+}
+
+async function poll(){
+  try {
+    const t = await (await fetch('/api/tlm')).json();
+    $('status').firstChild.textContent =
+      'IP '+t.ip+'   RSSI '+t.rssi+' dBm   ';
+    $('d_stream').className  = 'dot ' + (t.stream ? 'on':'bad');
+    $('d_thermal').className = 'dot ' + (t.thermal? 'on':'bad');
+    $('t_seq').textContent = t.seq;
+    $('t_mean').textContent = t.mean;
+    $('t_minmax').textContent = t.min+' / '+t.max;
+    $('t_sat').textContent = (t.sat_ppm/10000).toFixed(2)+' %';
+    $('t_exp').textContent = t.exp+' lines';
+    $('t_gain').textContent = (t.gain/1024).toFixed(2)+'x';
+    $('t_bl').textContent = t.bl;
+    $('t_wb').textContent = t.wbr.toFixed(2)+' / '+t.wbb.toFixed(2);
+    $('t_time').textContent = (t.cap_us/1000|0)+' / '+(t.isp_us/1000|0)+' / '+(t.usb_us/1000|0)+' ms';
+    $('t_up').textContent = fmtUp(t.up);
+    if (!$('ae_target').matches(':focus')) $('ae_target').value = t.ae_target;
+    $('ae_en').checked = !!t.ae_en;
+  } catch(e){ $('status').firstChild.textContent = 'disconnected — retrying… '; }
+}
+
+// Live preview (MJPEG, P3). Until the endpoint exists the <img> errors; retry slowly.
+function armPreview(){
+  const img = $('prev');
+  img.onload  = () => { $('prevmsg').style.display='none'; img.style.display='block'; };
+  img.onerror = () => { img.style.display='none'; $('prevmsg').style.display='block';
+                        setTimeout(armPreview, 4000); };
+  img.style.display='none';
+  img.src = '/stream?t=' + Date.now();
+}
+
+async function getlog(){
+  try { $('log').textContent = await (await fetch('/api/log')).text(); }
+  catch(e){ $('log').textContent = '(log endpoint not available yet)'; }
+}
+
+async function ota(){
+  const f = $('fw').files[0];
+  if (!f){ $('otamsg').textContent='pick a .bin first'; return; }
+  $('otamsg').textContent = 'uploading '+(f.size/1024|0)+' KB…';
+  try {
+    const r = await fetch('/api/ota', {method:'POST', body:f});
+    $('otamsg').textContent = r.ok ? 'OK — rebooting into new image…' : 'failed: '+await r.text();
+  } catch(e){ $('otamsg').textContent = 'upload error: '+e; }
+}
+
+poll(); setInterval(poll, 1000); armPreview();
+</script>
+</body>
+</html>
