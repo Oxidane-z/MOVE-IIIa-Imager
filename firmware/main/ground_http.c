@@ -23,6 +23,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
@@ -255,6 +256,47 @@ static esp_err_t stream_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ---- device log ring, served at /api/log (P4) -------------------------- */
+/* A global esp_log vprintf hook tees every log line into a wrap-around ring so
+ * the web UI can show recent device logs without a USB cable — the whole point
+ * of working remotely. Installed only when the ground server starts, so the
+ * flight build keeps the stock logger. Writer appends under a short spinlock;
+ * the reader is lock-free (a torn line in the debug view is harmless). */
+#define LOG_RING_SZ 4096
+static char            s_logbuf[LOG_RING_SZ];
+static volatile size_t s_loghead;
+static volatile bool   s_logwrap;
+static portMUX_TYPE    s_logmux = portMUX_INITIALIZER_UNLOCKED;
+static vprintf_like_t  s_log_orig;
+
+static int log_vprintf(const char *fmt, va_list ap)
+{
+    char tmp[200];
+    va_list cp; va_copy(cp, ap);
+    int n = vsnprintf(tmp, sizeof tmp, fmt, cp);
+    va_end(cp);
+    if (n > (int)sizeof tmp - 1) n = (int)sizeof tmp - 1;
+    if (n > 0) {
+        portENTER_CRITICAL(&s_logmux);
+        for (int i = 0; i < n; ++i) {
+            s_logbuf[s_loghead++] = tmp[i];
+            if (s_loghead >= LOG_RING_SZ) { s_loghead = 0; s_logwrap = true; }
+        }
+        portEXIT_CRITICAL(&s_logmux);
+    }
+    return s_log_orig ? s_log_orig(fmt, ap) : 0;   /* keep console output too */
+}
+
+static esp_err_t log_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    size_t head = s_loghead; bool wrap = s_logwrap;   /* snapshot; lock-free read */
+    if (wrap)      httpd_resp_send_chunk(req, s_logbuf + head, LOG_RING_SZ - head);
+    if (head > 0)  httpd_resp_send_chunk(req, s_logbuf, head);
+    httpd_resp_send_chunk(req, NULL, 0);              /* terminate */
+    return ESP_OK;
+}
+
 /* ---- OTA firmware update over WiFi (P4) -------------------------------- */
 static void ota_reboot_task(void *a)
 {
@@ -311,6 +353,9 @@ esp_err_t ground_http_start(void)
     if (s_server) return ESP_OK;                 /* already running */
     if (!s_mtx) { s_mtx = xSemaphoreCreateMutex(); if (!s_mtx) return ESP_ERR_NO_MEM; }
 
+    /* Tee device logs into the ring for /api/log (install once). */
+    if (!s_log_orig) s_log_orig = esp_log_set_vprintf(log_vprintf);
+
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port      = 80;
     cfg.lru_purge_enable = true;     /* free LRU connection when full (MJPEG holds one) */
@@ -326,12 +371,14 @@ esp_err_t ground_http_start(void)
     httpd_uri_t u_snap = { .uri = "/snapshot.jpg", .method = HTTP_GET,  .handler = snapshot_get };
     httpd_uri_t u_strm = { .uri = "/stream",       .method = HTTP_GET,  .handler = stream_get };
     httpd_uri_t u_ota  = { .uri = "/api/ota",      .method = HTTP_POST, .handler = ota_post };
+    httpd_uri_t u_log  = { .uri = "/api/log",      .method = HTTP_GET,  .handler = log_get  };
     httpd_register_uri_handler(s_server, &u_root);
     httpd_register_uri_handler(s_server, &u_tlm);
     httpd_register_uri_handler(s_server, &u_cmd);
     httpd_register_uri_handler(s_server, &u_snap);
     httpd_register_uri_handler(s_server, &u_strm);
     httpd_register_uri_handler(s_server, &u_ota);
+    httpd_register_uri_handler(s_server, &u_log);
 
     /* Bring up the hardware JPEG encoder for the live preview. Non-fatal: if it
      * fails the server still serves telemetry + control, just no image. */
