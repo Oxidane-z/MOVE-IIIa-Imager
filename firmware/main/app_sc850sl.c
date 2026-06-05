@@ -179,14 +179,35 @@ static uint16_t g_exposure = 0x0020;   /* legacy ISP-AE var (unused in bypass pa
 #define SC850SL_VTS_LINES   2250
 #define SC850SL_EXP_MAX     (SC850SL_VTS_LINES - 4)   /* 2246 */
 #define SC850SL_EXP_MIN     2
-#define AE_TARGET_RAW       110     /* target raw-frame mean (8-bit) */
+#define AE_TARGET_RAW       90      /* target raw-frame mean (8-bit). Lowered
+                                     * 110->90 (2026-06): daytime LEO scenes are
+                                     * high-contrast; a lower mean leaves headroom
+                                     * so bright cloud/ice/glint does not clip.
+                                     * Shadows are lifted back by the gamma. */
 #define AE_DEAD_RAW         10
+
+/* Highlight protection -- the daytime-overexposure fix. Mean metering alone
+ * blows out a dark-dominant scene's highlights: it raises exposure to hit the
+ * mean target and clips the clouds. So we also cap the fraction of near-full-
+ * scale pixels. AE_SAT_LEVEL is in the 8-bit high-byte domain of the RAW10
+ * sample (255 = full scale); 250 ~= raw 1000/1023. AE_SAT_BUDGET_PPM is the
+ * share of pixels at/above that level tolerated before the highlight guard in
+ * ae_step() forces brightness down regardless of the mean. */
+#define AE_SAT_LEVEL        250u    /* ~raw 1000/1023 in the 8-bit sample */
+#define AE_SAT_BUDGET_PPM   8000u   /* 0.8% of pixels may clip before pull-down */
 
 /* Gain is expressed in 1024 = 1.0x units (the vendor driver's convention);
  * sc850sl_set_exp_gain() maps it to the SC850SL's piecewise DCG+analog code
- * per the recipe recovered from sensor_sc850sl_mipi.c (task #22). */
+ * per the recipe recovered from sensor_sc850sl_mipi.c (task #22), cross-checked
+ * register-for-register against the CVITEK cv183x driver
+ * (reference/sophgo_cv183x_sc850sl/, 2026-06). */
 #define SC850SL_GAIN_UNITY  1024u
-#define SC850SL_GAIN_MAX    50790u   /* 49.6x — datasheet SENSOR_MAXGAIN */
+#define SC850SL_AGAIN_MAX   50790u   /* 49.6x - datasheet analog SENSOR_MAXGAIN */
+#define SC850SL_GAIN_MAX    (SC850SL_AGAIN_MAX * 8u)  /* + up to 8x digital ->
+                                     * ~397x total. Digital is NIGHT-only head-
+                                     * room past the analog ceiling; it steps in
+                                     * 6 dB (2x/4x/8x), so expect brightness
+                                     * stepping at the very top. UNTESTED on HW. */
 
 /* Anti-flicker: snap exposure to whole light-ripple periods so AC-lit scenes
  * don't band. Line period for our 2-lane 4K15 mode ≈ frame(66.67ms @15fps) /
@@ -882,10 +903,23 @@ static void sc850sl_set_exp_gain(uint32_t lines, uint32_t gain_x1024)
     sc850sl_write_reg_fast(g_cam, 0x3e02, (v >>  0) & 0xf0);
 
     /* Gain: choose the coarse DCG+analog code and DCG base, then the fine
-     * mantissa = 64*gain/(dcg*coarse), which lands in [0x40,0x7f]. */
+     * mantissa = 64*gain/(dcg*coarse), which lands in [0x40,0x7f].
+     * Breakpoints + 0x3e08 codes verified register-for-register against the
+     * CVITEK cv183x driver's AgainInfo[] table (reference/sophgo_cv183x_sc850sl). */
     uint32_t g = gain_x1024;
     if (g < SC850SL_GAIN_UNITY) g = SC850SL_GAIN_UNITY;
     if (g > SC850SL_GAIN_MAX)   g = SC850SL_GAIN_MAX;
+
+    /* Digital-gain relay (night-only headroom). The analog ladder tops out at
+     * 49.6x (SC850SL_AGAIN_MAX). Past that, rail analog and make up the rest
+     * with the sensor's digital gain on 0x3e06 (CVITEK cmos_dgain_calc_table:
+     * 0x00/0x01/0x03/0x07 = 1x/2x/4x/8x, coarse 6 dB steps). dig is x1024. */
+    uint32_t dig = 1024;
+    if (g > SC850SL_AGAIN_MAX) {
+        dig = (uint32_t)((uint64_t)g * 1024u / SC850SL_AGAIN_MAX);
+        g   = SC850SL_AGAIN_MAX;
+    }
+
     uint8_t  coarse_reg;
     uint32_t dcg, coarse;
     if      (g < 2048)  { coarse = 1; dcg = 1024; coarse_reg = 0x03; }
@@ -897,7 +931,26 @@ static void sc850sl_set_exp_gain(uint32_t lines, uint32_t gain_x1024)
     uint32_t fine = (64u * g) / (dcg * coarse);
     if (fine < 0x40) fine = 0x40;
     if (fine > 0x7f) fine = 0x7f;
-    sc850sl_write_reg_fast(g_cam, 0x3e06, 0x00);          /* digital gain = 1.0x */
+
+    /* Digital gain register (coarse 2^n, per CVITEK). 0x3e07 is the fine
+     * digital mantissa; pin it to unity (0x80) whenever digital is engaged so
+     * we don't ride an unknown power-on value (the M5Stack init never writes
+     * 0x3e07; the CVITEK init sets it 0x80). */
+    uint8_t dgain_reg = (dig < 2048) ? 0x00 :
+                        (dig < 4096) ? 0x01 :
+                        (dig < 8192) ? 0x03 : 0x07;
+
+    /* DPC strength vs gain (mirror CVITEK cmos_gains_update): the init table
+     * leaves 0x363c=0x07 (aggressive defect-pixel correction, right for high
+     * gain); below 2.0x that can over-soften, so drop to 0x04. Write only on
+     * change to spare the flaky SC850SL I2C bus. */
+    static uint8_t s_dpc_last = 0x07;  /* = init-table value */
+    uint8_t dpc = (g >= 2048u) ? 0x07 : 0x04;
+    if (dpc != s_dpc_last && sc850sl_write_reg_fast(g_cam, 0x363c, dpc) == ESP_OK)
+        s_dpc_last = dpc;
+
+    sc850sl_write_reg_fast(g_cam, 0x3e06, dgain_reg);
+    if (dgain_reg != 0x00) sc850sl_write_reg_fast(g_cam, 0x3e07, 0x80);
     sc850sl_write_reg_fast(g_cam, 0x3e08, coarse_reg);
     sc850sl_write_reg_fast(g_cam, 0x3e09, (uint8_t)fine);
 }
@@ -911,9 +964,31 @@ static void sc850sl_set_exp_gain(uint32_t lines, uint32_t gain_x1024)
  * Re-enabled June 2026: exposure/gain writes finally take effect now that
  * sc850sl_set_exp_gain() dropped the bogus 0x3800 group-hold and we removed
  * the boot 0x3e03=0x0b write (see task #22). */
-static void ae_step(int raw_mean)
+static void ae_step(int raw_mean, int sat_ppm)
 {
     if (raw_mean < 2) return;                         /* no signal yet */
+
+    /* Highlight guard (daytime overexposure fix), highest priority. If too
+     * many pixels sit at/near full scale, pull brightness DOWN regardless of
+     * the mean -- clipped highlights (cloud/ice/sun-glint in a LEO daytime
+     * scene) are unrecoverable, while the darker midtones we trade away are
+     * lifted by the 1/2.2 gamma downstream. Shed gain first (it only amplifies
+     * the clip), then shorten exposure; step harder than the symmetric AE ratio
+     * so we escape saturation within a couple of (throttled) cycles. */
+    if (sat_ppm > (int)AE_SAT_BUDGET_PPM) {
+        uint32_t exp = g_ae_exp_lines, gain = g_ae_gain_x1024;
+        if (gain > SC850SL_GAIN_UNITY) {
+            gain = (gain * 80u) / 100u;               /* -20% gain */
+            if (gain < SC850SL_GAIN_UNITY) gain = SC850SL_GAIN_UNITY;
+        } else {
+            exp = (exp * 80u) / 100u;                 /* -20% exposure */
+            if (exp < SC850SL_EXP_MIN) exp = SC850SL_EXP_MIN;
+        }
+        g_ae_exp_lines = exp; g_ae_gain_x1024 = gain;
+        sc850sl_set_exp_gain(exp, gain);
+        return;
+    }
+
     int err = AE_TARGET_RAW - raw_mean;
     if (err > -AE_DEAD_RAW && err < AE_DEAD_RAW) return;   /* close enough */
 
@@ -1098,12 +1173,12 @@ static void usb_stream_send(int cycle)
      * high bytes across the whole RAW10-packed frame (every 5th byte =
      * the LSB-packing byte is skipped; we step by a stride to keep it
      * cheap). */
-    int raw_mean = 0, raw_min = 255, raw_max = 0;
+    int raw_mean = 0, raw_min = 255, raw_max = 0, raw_sat_ppm = 0;
     {
         const uint8_t *raw = (const uint8_t *)g_capture_buf;
         size_t raw_bytes = (size_t)CAPTURE_W * CAPTURE_H * 10 / 8;
         uint8_t mn = 255, mx = 0;
-        uint64_t sum = 0; uint32_t cnt = 0;
+        uint64_t sum = 0; uint32_t cnt = 0, sat = 0;
         for (size_t i = 0; i < raw_bytes; i += 97) {  /* prime stride */
             if ((i % 5) == 4) continue;   /* skip RAW10 LSB-packing byte, so
                                            * min/mean reflect real pixel
@@ -1113,11 +1188,13 @@ static void usb_stream_send(int cycle)
             uint8_t v = raw[i];
             if (v < mn) mn = v;
             if (v > mx) mx = v;
+            if (v >= AE_SAT_LEVEL) ++sat;   /* near-full-scale (clipping) pixel */
             sum += v; ++cnt;
         }
         raw_mean = cnt ? (int)(sum / cnt) : 0;
         raw_min  = mn;
         raw_max  = mx;
+        raw_sat_ppm = cnt ? (int)((uint64_t)sat * 1000000u / cnt) : 0;
         /* min/max/mean now ride in the frame header (host overlays them), so
          * there's no per-frame log line here — that keeps the wire clean
          * between frames. A throttled summary still prints 1/30 below. */
@@ -1129,7 +1206,7 @@ static void usb_stream_send(int cycle)
      * doesn't change fast, and it bounds the per-frame I2C write load on the
      * flaky SC850SL bus (which, hammered every frame, was stalling and
      * watchdog-resetting the board). */
-    if ((cycle % 4) == 0) ae_step(raw_mean);
+    if ((cycle % 4) == 0) ae_step(raw_mean, raw_sat_ppm);
 
     /* Composite layout: RGB visible (left pane) | thermal (right pane).
      * Both panes are USB_PANE_W × USB_PANE_H inside a USB_STREAM_W-wide
@@ -1181,9 +1258,9 @@ static void usb_stream_send(int cycle)
      * trailer and BEFORE the next magic, so the host's magic search skips it
      * cleanly — keeps headless serial-capture debugging possible. */
     if ((cycle % 30) == 0) {
-        ESP_LOGI(TAG, "usb_stream[%d]: %u B wrote=%zu  raw min=%d max=%d mean=%d "
+        ESP_LOGI(TAG, "usb_stream[%d]: %u B wrote=%zu  raw min=%d max=%d mean=%d sat=%dppm "
                  "exp=%u gainx1024=%u bl=%d wb r=%.2f b=%.2f thermal=%s",
-                 cycle, (unsigned)USB_FRAME_TOTAL, n, raw_min, raw_max, raw_mean,
+                 cycle, (unsigned)USB_FRAME_TOTAL, n, raw_min, raw_max, raw_mean, raw_sat_ppm,
                  (unsigned)g_ae_exp_lines, (unsigned)g_ae_gain_x1024,
                  g_black_level, g_wb_r, g_wb_b, tr == ESP_OK ? "ok" : "none");
     }
