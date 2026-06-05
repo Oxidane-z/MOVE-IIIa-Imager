@@ -292,6 +292,9 @@ static float g_ccm[3][3] = {
  * focus aid: mean green-channel gradient of the preview (higher = sharper). */
 static bool     g_awb_enabled = true;
 static uint32_t g_focus       = 0;
+/* One-shot SSTV TX request (set by the web / future RS422 / autonomous mode,
+ * consumed by sstv_tx_task). */
+static volatile bool g_sstv_req = false;
 
 /* ---- USB live-preview stream ---- *
  *
@@ -1302,7 +1305,8 @@ static void usb_stream_send(int cycle)
                 g_ccm[1][0]=gc.ccm[3]; g_ccm[1][1]=gc.ccm[4]; g_ccm[1][2]=gc.ccm[5];
                 g_ccm[2][0]=gc.ccm[6]; g_ccm[2][1]=gc.ccm[7]; g_ccm[2][2]=gc.ccm[8];
             }
-            /* gc.sstv_trigger / gc.capture_hd are handled in P4. */
+            if (gc.sstv_trigger) g_sstv_req = true;   /* one-shot SSTV TX */
+            /* gc.capture_hd unused: the HD still is the synchronous /capture.jpg. */
         }
     }
 #endif
@@ -1648,8 +1652,12 @@ static void sstv_tx_task(void *arg)
 
     int cycle = 0;
     while (1) {
+        /* Wait for a trigger (web /api/cmd?sstv=1, or a future RS422 / autonomous
+         * beacon). No longer periodic, so it doesn't hog the capture on a timer. */
+        while (!g_sstv_req) vTaskDelay(pdMS_TO_TICKS(200));
+        g_sstv_req = false;
         ++cycle;
-        ESP_LOGI(TAG, "── SSTV TX cycle %d ──", cycle);
+        ESP_LOGI(TAG, "-- SSTV TX cycle %d (triggered) --", cycle);
 
         /* 1. Capture: pull the latest frame from the CSI/ISP DMA path
          *    (1920×1080 RGB565). If the pipeline isn't ready (init
@@ -1683,7 +1691,7 @@ static void sstv_tx_task(void *arg)
                                 g_pcm_buf, PCM_CAPACITY, &nsamp);
         if (r != ESP_OK) {
             ESP_LOGE(TAG, "encode failed: %s", esp_err_to_name(r));
-            goto sleep;
+            goto done;
         }
         ESP_LOGI(TAG, "encoded %u samples (%.2f s)",
                  (unsigned) nsamp, (double) nsamp / AUDIO_SR_HZ);
@@ -1703,11 +1711,10 @@ static void sstv_tx_task(void *arg)
             }
             total_written += written;
         }
-        ESP_LOGI(TAG, "✓ TX done (%zu bytes); sleeping %d s",
-                 total_written, SSTV_INTERVAL_SECS);
+        ESP_LOGI(TAG, "TX done (%zu bytes); waiting for next trigger", total_written);
 
-sleep:
-        vTaskDelay(pdMS_TO_TICKS(SSTV_INTERVAL_SECS * 1000));
+done:
+        (void)0;   /* loop back and wait for the next trigger */
     }
 }
 
@@ -1990,14 +1997,10 @@ void app_run(void)
      * DISABLED while bringing up the live preview — the TX task holds the
      * capture mutex for ~38 s per cycle, which freezes the USB preview and
      * makes image analysis painful. Re-enable once the image looks right. */
-#if 0
+    /* SSTV TX task — trigger-driven (not periodic), so it only captures + holds
+     * the audio path when actually asked (web /api/cmd?sstv=1). Idle otherwise. */
     xTaskCreate(sstv_tx_task, "sstv_tx", 6144, NULL, 5, NULL);
-    ESP_LOGI(TAG, "periodic SSTV TX task running (interval %d s)",
-             SSTV_INTERVAL_SECS);
-#else
-    (void) sstv_tx_task;   /* silence unused-function warning */
-    ESP_LOGI(TAG, "SSTV TX task DISABLED (live-preview bring-up mode)");
-#endif
+    ESP_LOGI(TAG, "SSTV TX task running (trigger-driven)");
 
 idle:
     /* Ground-test WiFi + web control — started HERE, only after the camera
