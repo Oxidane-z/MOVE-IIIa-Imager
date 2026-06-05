@@ -29,6 +29,7 @@ set(requires
     esp_driver_ledc
     esp_driver_i2s
     esp_timer
+    app_update        # esp_ota_ops: OTA write + anti-brick rollback
 )
 
 # Tab5 target needs the BSP + LVGL + audio codec stack.

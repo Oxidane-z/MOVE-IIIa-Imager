@@ -38,6 +38,7 @@
 #include "esp_check.h"
 #include "esp_cache.h"
 #include "esp_ldo_regulator.h"
+#include "esp_ota_ops.h"        /* OTA confirm/rollback (anti-brick) */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -1478,6 +1479,23 @@ sleep:
  *  Entry
  * ---------------------------------------------------------------- */
 
+/* OTA anti-brick: a freshly OTA-updated image boots in PENDING_VERIFY. We
+ * confirm it valid only after a short burn-in (it reached steady state without
+ * crashing); if it crashes/hangs before that it never confirms, and the
+ * bootloader rolls back to the previous slot on the next reset. See
+ * docs/FLIGHT_ARCHITECTURE.md §12. No-op on a normally (esptool-)flashed image. */
+static void ota_confirm_pending(void)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (run && esp_ota_get_state_partition(run, &st) == ESP_OK
+        && st == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA: running image confirmed valid (burn-in passed): %s",
+                 esp_err_to_name(e));
+    }
+}
+
 void app_run(void)
 {
     ESP_LOGI(TAG, "CubeSat imager booting (SC850SL flight target)");
@@ -1732,12 +1750,21 @@ void app_run(void)
 #endif
 
 idle:
-    /* Heartbeat: 1 Hz blink so we can see at a glance the firmware is alive. */
-    int level = 0;
-    while (1) {
-        heartbeat_blip(CONFIG_SC850SL_HEARTBEAT_LED_GPIO, level);
-        level ^= 1;
-        vTaskDelay(pdMS_TO_TICKS(500));
+    /* Heartbeat: 1 Hz blink so we can see at a glance the firmware is alive.
+     * After a ~5 s burn-in (firmware reached steady state without crashing),
+     * confirm a pending OTA image so the bootloader won't roll it back. */
+    {
+        int level = 0, ticks = 0;
+        bool ota_confirmed = false;
+        while (1) {
+            heartbeat_blip(CONFIG_SC850SL_HEARTBEAT_LED_GPIO, level);
+            level ^= 1;
+            if (!ota_confirmed && ++ticks >= 10) {   /* 10 × 500 ms ≈ 5 s */
+                ota_confirm_pending();
+                ota_confirmed = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
     }
 }
 

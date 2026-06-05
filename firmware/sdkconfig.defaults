@@ -108,6 +108,14 @@ CONFIG_PARTITION_TABLE_OFFSET=0x10000
 # Optimize bootloader for size (default already, but be explicit):
 CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
 
+# ---- OTA anti-brick rollback ----------------------------------------------
+# Dual ota_0/ota_1 slots + otadata are defined in partitions.csv. With rollback
+# enabled, a freshly-updated image boots in PENDING_VERIFY; app_run() confirms
+# it valid only after a ~5 s burn-in, otherwise the bootloader reverts to the
+# previous slot on the next reset. Essential for a satellite that can't be
+# re-flashed by hand. See docs/FLIGHT_ARCHITECTURE.md §12.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # ---- Compiler --------------------------------------------------------------
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y

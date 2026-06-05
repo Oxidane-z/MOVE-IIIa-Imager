@@ -1,10 +1,20 @@
-# Partition table for the CubeSat imager (16 MB flash).
-# No OTA for now — single factory app, plus NVS for tuning blob / calibration.
-# Partition table itself lives at 0x10000 (set in sdkconfig.defaults).
-# Empty offset cells let IDF auto-place starting after the table.
+# Partition table for the CubeSat imager (16 MB flash) — dual-OTA + rollback.
 #
-# Name,     Type, SubType, Offset,  Size,    Flags
-nvs,        data, nvs,     ,        0x6000,
-phy_init,   data, phy,     ,        0x1000,
-factory,    app,  factory, ,        4M,
-storage,    data, fat,     ,        2M,
+# Two equal app slots (ota_0 / ota_1) + an otadata partition let the firmware be
+# updated over RS422 (flight) or WiFi (ground) with anti-brick rollback — see
+# docs/FLIGHT_ARCHITECTURE.md §12. Slots are 2 MB: the app is ~0.33 MB today, and
+# 2 MB leaves headroom for WiFi+TLS while keeping ~12 MB for image `storage`.
+#
+# The partition table lives at 0x10000 (CONFIG_PARTITION_TABLE_OFFSET); app
+# slots must be 64 KB-aligned, so ota_0 is pinned at 0x20000 (same offset the old
+# single `factory` app used). Empty offset cells auto-place after the table.
+#
+# Changing the layout requires a full re-flash: `idf.py erase-flash` then flash.
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     ,         0x6000,
+otadata,    data, ota,     ,         0x2000,
+phy_init,   data, phy,     ,         0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x200000,
+ota_1,      app,  ota_1,   ,         0x200000,
+storage,    data, fat,     ,         0xBE0000,
