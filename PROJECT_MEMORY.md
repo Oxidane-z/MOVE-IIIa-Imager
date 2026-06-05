@@ -1382,6 +1382,85 @@ itself is NOT under git — track it separately or as a submodule if ever needed
 
 ---
 
+## 11. Flight-SW session: exposure unblocked, transmission fixed, OTA foundation (2026-06)
+
+Big session. End state — what WORKS, what's BROKEN, where things are.
+
+### What now works
+- **SC850SL exposure/gain UNBLOCKED** (host AE converges to ~mean 110). Recipe
+  recovered from the OpenIPC C reference (`reference/sensor_sc850sl_mipi.c`:
+  `pCus_SetAEUSecs`/`pCus_SetAEGain`), NOT the `.so`. The old dead code's bugs:
+  it poked `0x3800` as a "group-hold" (SC850SL has none there) and wrote
+  `0x3e03=0x0b` "AGC enable" at boot (forced a mode that ignored manual writes)
+  — *those two* were why exposure did nothing. New: gain = piecewise DCG+analog
+  code (`0x3e08`∈{03,07,23,27,2f,3f}, `0x3e09` fine, `0x3e06`=0); exposure =
+  `lines<<4` across 3e00/01/02; `ae_step` re-enabled (exposure-priority +
+  anti-flicker snap to mains period, throttled 1/4 frames).
+- **Watchdog reset loop fixed.** Per-frame AE I²C writes occasionally hit a
+  stuck I2C0 bus; the normal write's retry+bus-reset storm blocked the stream
+  task for seconds → task-WDT → reboot loop. Added `sc850sl_write_reg_fast()`
+  (single-shot, no bus-reset) for the AE hot path.
+- **USB preview smearing FIXED.** Root cause: the USB-Serial-JTAG console did
+  **LF→CRLF translation**, expanding every `0x0A` byte in the binary frame →
+  content-dependent length drift → desync (bright frames worse; all-black
+  covered frame fine). Fix: `usb_serial_jtag_vfs_set_tx_line_endings(LF)`. Also
+  hardened framing: single atomic `fwrite` (header+payload+trailer), `DEADBEEF`
+  trailer (host drops+resyncs), stats in a 24-byte header. Viewer rewritten
+  (`tools/usb_preview.py`, wire format v1) — overlays max/mean/bl/wb.
+- **Black-level subtract + 3×3 CCM** added to software ISP-lite (good under
+  adequate light).
+- **Repo on GitHub (public):** <https://github.com/Oxidane-z/MOVE-IIIa-Imager>.
+  Folders reorganized (`docs/ reference/ datasheets/ _archive/`); MI1602 driver
+  **vendored in-tree** at `firmware/components/mi1602/` (a fresh clone now builds
+  standalone). HEAD = `ef3b73c`. `capture_serial.py` got an open-retry.
+- **OTA foundation (flight roadmap step 1):** dual-OTA partition table (`ota_0`/
+  `ota_1` @2 MB + `otadata`), `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`,
+  `app_update` dep, `ota_confirm_pending()` with a ~5 s burn-in in `app_run`'s
+  idle loop. Built clean; RUNTIME not yet hardware-verified.
+
+### Broken / pending
+- **MI1602 thermal pane BLACK (task #27).** Probe + addr auto-detect work (ADDR
+  strap floats 0x40/0x41 across power-ons; `mi1602_probe` now scans and uses
+  whichever ACKs), BUT `mi1602_bootup` times out: `status=0x20` =
+  MI48 BOOTING_UP never clears (used to clear in ~0 ms). Likely the **5 V solder
+  joint** to the MI48 (digital core ACKs I²C but full boot stalls). Next: measure
+  / reflow 5 V; optional boot-timeout bump 500→3000 ms; optional wire RESET_N
+  (currently rst=−1).
+- **SC850SL 2×2 binning / 1080p HW-ISP path: shelved** (task #22 closed). Reg
+  table not in any source (all 4K); would need Ghidra or datasheet derivation,
+  or use a 1080p **center-crop window** instead.
+
+### Flight architecture (NEW) — see `docs/FLIGHT_ARCHITECTURE.md`
+Key principle: **AUTONOMOUS SSTV-beacon is the default** (capture + SSTV, RGB⇄LWIR
+alternating, low duty) so the payload works even if RS422 fails. The OBC owns
+the P4's **power switch**, so "OBC dead" = unpowered = not a software case; the
+only fault handled is *powered + RS422 silent > T_link → AUTONOMOUS* (no dead-man
+logic). Multi-core: HP0 = camera/ISP, HP1 = `rs422_link`(high-prio lifeline) +
+`sstv_i2s`, LP = supervisor (heartbeat watchdog + reads board temp + low-power).
+Roadmap: (1) OTA ✅; (2) rs422_link + dispatch; (3) autonomous beacon; (4)
+multi-core; (5) bulk paths; (6) hardening.
+
+### Confirmed from the latest schematic
+- **RS422 = UART0**: TX=GPIO37, RX=GPIO38, **DE=GPIO39** (full-duplex, RX
+  always-on, DE gates TX). Console on USB → U0 free. The `SSTV0_TX/RX±` nets are
+  the *same* RS422 pair after 10 Ω series filters — NOT a second channel.
+- **Board temp = Microchip AT30TS74**, I²C **addr 0x48**, on the **LP-I²C bus
+  (I2C2): SDA=LP_GPIO7, SCL=LP_GPIO8** → the LP supervisor reads it directly.
+- 3 I²C buses (I2C0/1/2); DSI display **unused** (MIPI pins = camera CSI).
+- C6 WiFi addon = **SDIO** (ESP-Hosted/`esp_wifi_remote`), ground-only; exact
+  `SDIO2_*` P4 GPIOs still TBD (Stamp-P4 pinmap) — confirm no clash.
+
+### Next pickups (priority)
+1. **At hardware:** `idf.py erase-flash` then flash (layout changed) → verify OTA
+   boots `ota_0` + logs "OTA … confirmed valid" after ~5 s; re-confirm exposure/AE
+   and check thermal (the 5 V fix).
+2. Fix MI1602 5 V / bootup (task #27).
+3. Flight roadmap **step 2**: `rs422_link` + `cmd_dispatch` skeleton (UART0,
+   DE=GPIO39; `PING`/`GET_TLM`/`CAPTURE` first).
+4. Resolve TBDs: C6 SDIO pins, RS422 transceiver part/baud, `T_beacon`/`T_link`.
+
+---
+
 - ESP-IDF v6.0.1 release: <https://github.com/espressif/esp-idf/releases/tag/v6.0.1>
 - ESP-IDF v6.0 breaking changes: <https://github.com/espressif/esp-idf/issues/17052>
 - ESP32-P4 ISP API (v6.0.1): <https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32p4/api-reference/peripherals/isp.html>
