@@ -1591,11 +1591,16 @@ pre-flashed ESP-Hosted slave fw was compatible first try — **no C6 reflash**.
 - **HW-verified:** P1 link+STA (`got ip 10.200.0.121`) and P2 telemetry+control
   (`/`, `/api/tlm`, `/api/cmd`). Live timing telemetry confirmed software-ISP
   ~0.66 s, USB ~0.36 s per frame.
-- **Built clean, NOT yet HW-tested** (board unplugged before flash): P3 JPEG
-  live preview (`/snapshot.jpg`, MJPEG `/stream`), **OTA over WiFi**
-  (`/api/ota`), on-demand ISP (render only when a `/stream` viewer is up or USB
-  push on), USB binary push default OFF on WiFi build, mDNS+DHCP hostname
-  (**move-imager.local**), `/api/log` device-log ring.
+- **Built clean, NOT yet HW-tested** (board unplugged before flash) — the rest
+  of the ground station: P3 JPEG preview (`/snapshot.jpg`, MJPEG `/stream`),
+  **OTA over WiFi** (`/api/ota`), mDNS+DHCP hostname (**move-imager.local**),
+  `/api/log` log ring; on-demand ISP (renders only when a `/stream` viewer is up
+  or USB push on) + USB binary push default OFF; system-health telemetry
+  (heap/psram/reset) + **reboot** + **NVS-persisted settings** (`save=1`); live
+  colour tuning (AWB/WB/black-level/CCM) + focus aid; **HD still** `/capture.jpg`
+  (1280×720; `ground_render_hd` reuses the SW ISP); **web-triggered SSTV**
+  (`sstv=1`; sstv_tx_task now trigger-driven — task #23 closed). Full
+  endpoint/command reference: `docs/GROUND_WIFI.md`.
 
 **The bug we hit + fixed (P1):** starting WiFi before `app_run()` collided with
 the SC850SL stream-on — the WiFi-connect transient wedged the sensor's port-0
@@ -1624,8 +1629,15 @@ Kconfig-gated; flight dead-strips them).
 3. Remaining P4: full-res HD download, SSTV trigger from web (task #23), and
    re-test SDIO at 40 MHz (C6 reports the PCB supports it; we run 20 MHz).
 
-Commits: `82b2102` P2 · `1ba5120` P3+OTA+mDNS+on-demand · `e3de44f`
-`/api/log`+`GROUND_WIFI.md`.
+Commits: `82b2102` P2 · `1ba5120` P3+OTA+mDNS+on-demand · `e3de44f` /api/log +
+guide · `1c8de7a` health+reboot+NVS · `a2e4d0e` tuning+focus · `5661117` HD
+capture · `e101b0f` SSTV trigger · `c7f4bf5` guide refresh.
+
+**NEXT (held by user):** RS422 OBC link + command dispatch (task #28 step 2) —
+new `rs422` module on UART0 (TX37/RX38/DE39), `SYNC|LEN|TYPE|SEQ|payload|CRC16`
+parser, `PING/GET_TLM/CAPTURE` dispatch. **When HW is back:** one USB flash of
+the ground build, then exercise the whole stack at move-imager.local (preview,
+HD capture, OTA round-trip, tuning, SSTV, /api/log) — it's all unverified.
 
 ---
 
