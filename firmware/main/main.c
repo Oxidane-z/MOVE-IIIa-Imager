@@ -11,6 +11,7 @@
  * the per-target module. Keeps each path easy to read in isolation.
  */
 #include "app.h"
+#include "ground_wifi.h"
 #include "esp_log.h"
 
 static const char *TAG = "main";
@@ -24,6 +25,12 @@ void app_main(void)
 #else
 #error "No CAMERA_TARGET selected. Run idf.py menuconfig."
 #endif
+
+    /* Ground-test only: bring up WiFi via the C6 addon + serve the web control
+     * page. Non-blocking (spawns its own task); compiles to a no-op stub in the
+     * flight build (CONFIG_GROUND_WIFI_ENABLE off). Started before app_run() so
+     * the link is coming up while the camera pipeline initializes. */
+    ground_wifi_start();
 
     /* Hand off to the target-specific application. It never returns. */
     app_run();

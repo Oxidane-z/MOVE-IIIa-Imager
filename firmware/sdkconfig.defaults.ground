@@ -1,0 +1,41 @@
+# Ground-test overlay (NON-SECRET) for the C6 WiFi + web ground station.
+#
+# Layered ON TOP of sdkconfig.defaults by _build_ground.bat via
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.ground;sdkconfig.ground.secret"
+# so the flight build (_build.bat, sdkconfig.defaults only) is completely
+# unaffected. NEVER put the WiFi password here -- that lives in the gitignored
+# sdkconfig.ground.secret. See docs/FLIGHT_ARCHITECTURE.md s13.
+
+# Master switch: pulls in esp_wifi_remote + esp_hosted (gated in
+# main/idf_component.yml) and our ground_wifi module.
+CONFIG_GROUND_WIFI_ENABLE=y
+
+# The radio co-processor on the M5 Stamp-AddOn is an ESP32-C6. esp_wifi_remote
+# proxies the esp_wifi API to it; esp_hosted is the SDIO transport.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+
+# --- SDIO transport: P4 host, Slot 1 (flexible GPIOs), 4-bit bus ------------
+# DEV_BOARD_NONE (the default) is what opens the Slot-1 pin ranges to 0-100 so
+# we can set the addon's custom pins; the Espressif dev-board presets lock the
+# pins to other GPIOs. Set explicit for documentation.
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_NONE=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+
+# M5 Stamp-AddOn C6 -> Stamp-P4 routing. These Slot-1 "PRIV" symbols are what
+# esp_hosted resolves into the real SDMMC host pins (ESP_HOSTED_SDIO_PIN_*).
+# CLK=43 CMD=44 D0=45 D1=46 D2=47 D3=48 reset=42. If the link does not come up,
+# re-check these against the addon pinmap/schematic.
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=43
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=44
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=45
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=46
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=47
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=48
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=42
+
+# Conservative SDIO clock for first bring-up (kHz; ESP32-P4 host max 40000).
+# Bump toward 40000 once the link is proven stable.
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=20000

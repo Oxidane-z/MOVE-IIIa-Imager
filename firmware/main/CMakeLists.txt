@@ -3,7 +3,7 @@
 # were listed unconditionally the wrong one's body would be empty —
 # but actually NOT listing it means the compiler doesn't have to even
 # open the file, which shaves a few seconds off a clean build.
-set(srcs "main.c" "mi1602_probe.c")
+set(srcs "main.c" "mi1602_probe.c" "ground_wifi.c")
 if(CONFIG_CAMERA_TARGET_SC850SL)
     list(APPEND srcs "app_sc850sl.c")
 elseif(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
@@ -30,6 +30,12 @@ set(requires
     esp_driver_i2s
     esp_timer
     app_update        # esp_ota_ops: OTA write + anti-brick rollback
+    esp_wifi          # esp_wifi.h for ground_wifi.c. esp_wifi_remote PRIV_REQUIREs
+                      # esp_wifi (so it isn't transitive) and REQUIRES can't be
+                      # Kconfig-gated, so list it unconditionally. On P4 without
+                      # esp_wifi_remote it builds as weak/empty stubs, and
+                      # ground_wifi.c is #if'd out, so flight links no WiFi code.
+    nvs_flash         # NVS init for the (ground-only) WiFi stack; inert in flight.
 )
 
 # Tab5 target needs the BSP + LVGL + audio codec stack.
@@ -41,6 +47,13 @@ if(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
         lvgl__lvgl
     )
 endif()
+
+# NOTE on the ground-WiFi deps: esp_wifi + nvs_flash are in the unconditional
+# `requires` above (REQUIRES cannot be Kconfig-gated — they expand before
+# Kconfig loads). esp_netif/esp_event arrive transitively from esp_wifi_remote's
+# public REQUIRES when GROUND_WIFI_ENABLE is on; esp_wifi_remote + esp_hosted
+# themselves are pulled (gated on that symbol) via idf_component.yml. The flight
+# build fetches none of that and ground_wifi.c self-#if-guards to empty.
 
 # Always-needed private requires. SC850SL needs CSI + ISP + LDO for the
 # MIPI host; both targets touch esp_cache_msync etc. through esp_hw_support.

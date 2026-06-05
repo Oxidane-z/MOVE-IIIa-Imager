@@ -4,6 +4,8 @@ firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/dependencies.lock
 firmware/managed_components/
+# Ground-test WiFi credentials overlay (SSID/password) — never commit.
+firmware/sdkconfig.ground.secret
 
 # --- One-off logs / scratch ------------------------------------------------
 firmware/build_log.txt

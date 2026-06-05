@@ -171,3 +171,52 @@ config MI1602_SYSCLK_HZ
 endif  # MI1602_ENABLED
 
 endmenu
+
+# ============================================================================
+# Ground-test WiFi via the M5Stack Stamp-AddOn C6 (ESP32-C6 over SDIO).
+# GROUND-ONLY. Default OFF so the flight build is byte-for-byte unaffected:
+# the esp_wifi_remote / esp_hosted dependencies in main/idf_component.yml are
+# gated on this symbol, so they aren't even fetched unless it's on. The P4 has
+# no radio; the C6 is a WiFi co-processor reached over SDIO (P4 host Slot-1
+# flexible GPIOs, wired by the addon to G42-48). See FLIGHT_ARCHITECTURE.md s13.
+# ============================================================================
+menu "CubeSat Imager — Ground WiFi (C6 addon, ground-test only)"
+
+config GROUND_WIFI_ENABLE
+    bool "Enable ground-test WiFi + web control (C6 addon over SDIO)"
+    default n
+    help
+        Master switch for the ground-station feature. Leave OFF for the
+        flight build. When ON, the firmware brings up the ESP32-C6 over
+        SDIO (esp_hosted), joins the WiFi network named below as a
+        station (esp_wifi_remote), and serves a control web page
+        (esp_http_server). None of that stack is fetched or built when
+        this is OFF.
+
+if GROUND_WIFI_ENABLE
+
+config GROUND_WIFI_SSID
+    string "WiFi SSID to join (station mode)"
+    default ""
+    help
+        Your local 2.4 GHz network name (the C6 is 2.4 GHz Wi-Fi 6 only,
+        no 5 GHz). Leave blank in the repo and set it via menuconfig so
+        it lands only in the gitignored sdkconfig, never a committed file.
+
+config GROUND_WIFI_PASSWORD
+    string "WiFi password (WPA2)"
+    default ""
+    help
+        WPA2 passphrase. Same secrecy note as the SSID: set it via
+        menuconfig, do not commit it.
+
+config GROUND_WIFI_MAX_RETRY
+    int "STA connect retries before backoff"
+    default 8
+    help
+        How many times to retry esp_wifi_connect() on a disconnect
+        before a longer backoff sleep. Ground convenience only.
+
+endif  # GROUND_WIFI_ENABLE
+
+endmenu

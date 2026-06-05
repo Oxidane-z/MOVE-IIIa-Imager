@@ -30,6 +30,22 @@ dependencies:
     rules:
       - if: "$CONFIG{CAMERA_TARGET_SC202CS_TAB5} == True"
 
+  # Ground-test WiFi via the M5Stack Stamp-AddOn C6 (ESP32-C6 over SDIO).
+  # esp_wifi_remote proxies the esp_wifi API to the C6 co-processor;
+  # esp_hosted is the SDIO transport. Gated on CONFIG_GROUND_WIFI_ENABLE so the
+  # flight build never fetches the (tens-of-MB) WiFi stack. esp_wifi_remote
+  # already depends on esp_hosted, but we list both so the slave-target Kconfig
+  # is visible. Version pins are validated on first fetch against IDF v6.0.1 —
+  # adjust if the resolver complains. See FLIGHT_ARCHITECTURE.md s13.
+  espressif/esp_wifi_remote:
+    version: "^1.6"
+    rules:
+      - if: "$CONFIG{GROUND_WIFI_ENABLE} == True"
+  espressif/esp_hosted:
+    version: "*"
+    rules:
+      - if: "$CONFIG{GROUND_WIFI_ENABLE} == True"
+
   # esp_video / esp_cam_sensor are NOT pulled in for the SC850SL build.
   # esp_video v1.0 doesn't compile against IDF v6.0.1 (API breakage on
   # CAM_CTLR_COLOR_YUV422 and COLOR_SPACE_TYPE macros). We copied the
