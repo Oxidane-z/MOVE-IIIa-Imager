@@ -56,6 +56,7 @@
 
 #include "sc850sl.h"
 #include "sstv_robot36.h"
+#include "ground_wifi.h"   /* ground-test WiFi + web control (no-op in flight) */
 #include "test_image.h"      /* 320×240 RGB565 fallback test pattern */
 
 static const char *TAG = "app/sc850sl";
@@ -1844,6 +1845,15 @@ void app_run(void)
 #endif
 
 idle:
+    /* Ground-test WiFi + web control — started HERE, only after the camera
+     * bring-up has fully run (success OR early-failure goto). Bringing the
+     * C6/SDIO + WiFi up before app_run() collided with the SC850SL stream-on:
+     * the WiFi-connect current/noise transient wedged the sensor's port-0 I²C
+     * bus mid-stream-on (while the port-1 MI1602 bus, probed later, survived).
+     * Deferring WiFi until the sensor is already streaming decouples the two.
+     * No-op stub in the flight build (CONFIG_GROUND_WIFI_ENABLE off). */
+    ground_wifi_start();
+
     /* Heartbeat: 1 Hz blink so we can see at a glance the firmware is alive.
      * After a ~5 s burn-in (firmware reached steady state without crashing),
      * confirm a pending OTA image so the bootloader won't roll it back. */
