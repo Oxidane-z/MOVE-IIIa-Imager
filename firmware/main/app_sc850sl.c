@@ -39,6 +39,7 @@
 #include "esp_cache.h"
 #include "esp_ldo_regulator.h"
 #include "esp_ota_ops.h"        /* OTA confirm/rollback (anti-brick) */
+#include "esp_timer.h"          /* esp_timer_get_time: per-stage frame timing */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -1160,6 +1161,13 @@ static void usb_stream_send(int cycle)
         return;
     }
 
+    /* Per-stage timing (esp_timer, microseconds): splits the frame budget
+     * across sensor-wait / software-ISP / USB. Cheap (~1 us/call); only the
+     * deltas get logged, on the 1/30 throttle below. Useful for sizing the
+     * multicore flight schedule and as a baseline to compare any future
+     * hardware-ISP path against. */
+    int64_t t_cap0 = esp_timer_get_time();
+
     /* Capture a fresh frame, then downscale to 320×240 for the stream. */
     esp_err_t r = camera_capture_frame(g_capture_buf);
     if (r != ESP_OK) {
@@ -1167,6 +1175,7 @@ static void usb_stream_send(int cycle)
                  cycle, esp_err_to_name(r));
         return;
     }
+    int64_t t_cap1 = esp_timer_get_time();   /* sensor-wait + DMA transfer */
     /* Diagnostic: scan the raw capture buffer for min/max/mean so we can
      * tell underexposure (all near 0) from a data-extraction bug (exactly
      * 0 everywhere) from a healthy signal (spread of values). Sample the
@@ -1213,12 +1222,15 @@ static void usb_stream_send(int cycle)
      * buffer, so each renderer writes with dst_stride = USB_STREAM_W. */
 
     /* LEFT pane: RGB. g_capture_buf is RAW10 Bayer (RGGB); demosaic +
-     * box-filter + AWB + gamma straight into the left half. */
+     * box-filter + AWB + gamma straight into the left half. This call IS the
+     * "software ISP" whose per-frame cost we're timing (t_ds1 - t_ds0). */
+    int64_t t_ds0 = esp_timer_get_time();
     downscale_raw10_bggr_to_rgb565((const uint8_t *)g_capture_buf,
                                    CAPTURE_W, CAPTURE_H,
                                    g_usb_stream_buf,            /* left pane @ x=0 */
                                    USB_PANE_W, USB_PANE_H,
                                    USB_STREAM_W);
+    int64_t t_ds1 = esp_timer_get_time();
 
     /* RIGHT pane: thermal. Capture an MI1602 frame, false-color + scale
      * into the right half. If the IR module isn't present / a capture
@@ -1251,18 +1263,23 @@ static void usb_stream_send(int cycle)
     put_u16le(H + 20, (uint16_t)(g_wb_r * 256.0f + 0.5f));
     put_u16le(H + 22, (uint16_t)(g_wb_b * 256.0f + 0.5f));
 
+    int64_t t_usb0 = esp_timer_get_time();
     size_t n = fwrite(g_frame_buf, 1, USB_FRAME_TOTAL, stdout);
     fflush(stdout);
+    int64_t t_usb1 = esp_timer_get_time();
 
     /* Throttled summary (1/30 frames). It lands in the gap AFTER a frame's
      * trailer and BEFORE the next magic, so the host's magic search skips it
      * cleanly — keeps headless serial-capture debugging possible. */
     if ((cycle % 30) == 0) {
         ESP_LOGI(TAG, "usb_stream[%d]: %u B wrote=%zu  raw min=%d max=%d mean=%d sat=%dppm "
-                 "exp=%u gainx1024=%u bl=%d wb r=%.2f b=%.2f thermal=%s",
+                 "exp=%u gainx1024=%u bl=%d wb r=%.2f b=%.2f thermal=%s "
+                 "| t cap=%lldus isp=%lldus usb=%lldus",
                  cycle, (unsigned)USB_FRAME_TOTAL, n, raw_min, raw_max, raw_mean, raw_sat_ppm,
                  (unsigned)g_ae_exp_lines, (unsigned)g_ae_gain_x1024,
-                 g_black_level, g_wb_r, g_wb_b, tr == ESP_OK ? "ok" : "none");
+                 g_black_level, g_wb_r, g_wb_b, tr == ESP_OK ? "ok" : "none",
+                 (long long)(t_cap1 - t_cap0), (long long)(t_ds1 - t_ds0),
+                 (long long)(t_usb1 - t_usb0));
     }
 }
 
