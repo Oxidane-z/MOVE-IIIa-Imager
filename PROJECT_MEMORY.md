@@ -769,9 +769,9 @@ M5Stack BSP artifacts (rootfs_files/):
   opt/etc/sc850sl_sdr_2lane_15fps.ini      ⭐ target config
   opt/etc/sc850sl_sdr_4lane.ini            (4L reference)
   opt/etc/sc850sl_hdr_4lane.ini            (HDR reference)
-  opt/etc/sc850sl_sdr_ptnw768_600G_25fps.bin   AE/AGC tuning blob (674 KB)
-  opt/etc/sc850sl_sdr_mode3_switch_mode7.bin    mode-switch fw (674 KB)
-  opt/etc/sc850sl_hdr_2x_ratio_*.bin       HDR ratio LUTs
+  opt/etc/sc850sl_sdr_ptnw768_600G_25fps.bin   AX620E ISP param blob, NOT sensor fw (674 KB) — see §12.1
+  opt/etc/sc850sl_sdr_mode3_switch_mode7.bin    AX620E ISP param blob, NOT sensor fw (674 KB) — see §12.1
+  opt/etc/sc850sl_hdr_2x_ratio_*.bin       AX620E ISP HDR param blobs (hdr "AX620E_ISP_V4.0.31") — see §12.1
   opt/lib/libsns_sc850sl.so.0.0.0          source of the tables (2.7 MB)
   opt/bin/FRTDemo|FRTTest/.../sc850sl.json (app configs)
 
@@ -1427,8 +1427,10 @@ Big session. End state — what WORKS, what's BROKEN, where things are.
   / reflow 5 V; optional boot-timeout bump 500→3000 ms; optional wire RESET_N
   (currently rst=−1).
 - **SC850SL 2×2 binning / 1080p HW-ISP path: shelved** (task #22 closed). Reg
-  table not in any source (all 4K); would need Ghidra or datasheet derivation,
-  or use a 1080p **center-crop window** instead.
+  table not in any source (all 4K). **Now a CONFIRMED public negative — see §12**:
+  three independent SoC-vendor drivers (Axera, SigmaStar, Sophgo) are all
+  4K-only, so a sub-4K table must be center-crop-windowed or hand-derived, not
+  found. Decompiling the `.so`/`.bin` will not yield it.
 
 ### Flight architecture (NEW) — see `docs/FLIGHT_ARCHITECTURE.md`
 Key principle: **AUTONOMOUS SSTV-beacon is the default** (capture + SSTV, RGB⇄LWIR
@@ -1458,6 +1460,118 @@ multi-core; (5) bulk paths; (6) hardening.
 3. Flight roadmap **step 2**: `rs422_link` + `cmd_dispatch` skeleton (UART0,
    DE=GPIO39; `PING`/`GET_TLM`/`CAPTURE` first).
 4. Resolve TBDs: C6 SDIO pins, RS422 transceiver part/baud, `T_beacon`/`T_link`.
+
+---
+
+## 12. RE data-source audit + Sophgo CV183x cross-reference (2026-06-05)
+
+Re-audited every obtained file for remaining reverse-engineering value, then ran
+a full web search (deep-research, 99 agents) for SC850SL data sources outside
+M5Stack. Net: the RE well is dry for anything that ports to the P4; one new
+*independent* source was found (still 4K-only); the binning/1080p table is now a
+**confirmed public negative**.
+
+### 12.1 Correction to §6 — the four `sc850sl_*.bin` are NOT sensor firmware
+Hexdump shows all four carry the header `AX620E_ISP_V4.0.31`. They are **Axera
+AX620E ISP parameter/tuning blobs**, not SC850SL sensor register data. The old
+§6 labels ("AE/AGC tuning blob", "mode-switch fw", "HDR ratio LUTs") were
+misidentifications — zero transfer value to the P4 (different ISP; we run
+software ISP-lite). Same verdict for `rootfs_files/opt/etc/models/aiisp/*.axmodel`
+(Axera NPU AI-ISP models). `libsns_sc850sl.so.0.0.0` is stripped aarch64; only
+its `.data` register tables were ever useful and those are fully extracted —
+no binning table inside (M5Stack only ever shipped 4K: all 4 tables + all `.ini`
+= 3840×2160).
+
+### 12.2 NEW independent source: Sophgo/CVITEK CV183x driver (4K-only)
+Third fully-independent SC850SL driver (distinct from M5Stack/Axera and
+OpenIPC/SigmaStar):
+- Repo `sipeed/LicheeRV-Nano-Build`, path
+  `middleware/v2/component/isp/sensor/cv183x/sms_sc850sl/` (5 files).
+- **Plain-C hex literals** (not a binary blob) — `sc850sl_write_register(ViPipe,
+  0xRRRR, 0xVV)`, copy straight into bare-metal I²C. Chip-ID defines match our
+  silicon (0x3107/0x3108 = 0x9d1e).
+- Vendored locally at `reference/sophgo_cv183x_sc850sl/` (+ `diff_vs_m5stack.py`).
+- TWO modes only, both 4K: `sc850sl_linear_2160P30_init` (4-lane **RAW12** 4K30,
+  147 writes) + `sc850sl_wdr_2160P30_2to1_init` (HDR-DOL 4K30, 200 writes). No
+  1080p/binning. Exists ONLY under `cv183x` (not cv181x/cv182x, the SG2002's
+  family) → it's a reference, not a drop-in for that board.
+
+### 12.3 Three-way register diff (`reference/.../diff_vs_m5stack.py`)
+Sophgo-linear (4L RAW12) vs M5Stack table_0 (4L RAW10 4K30) vs table_2 (2L RAW10
+4K15, our flight mode), last-write-wins:
+- **96 registers identical across all three vendors** → SENSOR-CORE INVARIANTS
+  (analog/pixel/calib: 0x33xx/0x36xx/0x39xx/0x59xx, plus HTS 0x320c/d = 0x044c).
+  Keep untouched when deriving a new mode; also independently corroborates our
+  extracted M5Stack tables.
+- Volatile per-mode block (all three differ): PLL/MIPI 0x36e9/ea/f9/fa/fb/fc/fd +
+  lane(0x3018)/bitdepth(0x3031). **Not hand-derivable** — this is the binning
+  blind spot.
+- **Sophgo's only genuinely-new data**: a baked-in exposure/gain default block
+  (~24 regs: 0x3e04-09, 0x3e51/52/58/59, 0x3e66/67/6a/6b, 0x3e71/72, 0x3e82/83)
+  the M5Stack tables leave to the runtime AE loop — a useful THIRD reference to
+  cross-check our OpenIPC-derived gain layout (0x3e08 coarse / 0x3e09 fine /
+  0x3e06 digital) and for future HDR dual-exposure work.
+- **None of the three** writes any output-window (0x3208/0a/10/12) or binning
+  register — all run full-res on power-on defaults. A crop/bin mode must ADD
+  registers none of them documents.
+
+### 12.4 CONFIRMED public negative — no sub-4K / binning / 1080p table exists
+Verified across three independent SoC-vendor drivers + official + community:
+- Axera/M5Stack (4 tables), SigmaStar/OpenIPC (`sensor_sc850sl_mipi.c`, 3 modes),
+  Sophgo/CV183x (2 modes) — **all 3840×2160 only**.
+- Sophgo tree has exactly one SC850SL variant (cv183x); no cv181x/182x version.
+- Sipeed MaixCAM2 (Axera AX630) lists SC850SL but at 4K/60fps/4-lane — same Axera
+  family as M5Stack, expected to overlap; not chased deeper.
+- Espressif `esp_cam_sensor` has **NO** SC850SL driver (only sc02xx/sc03xx/sc101/
+  sc2336) — confirms our hand-rolled flight driver fills a real gap.
+- SmartSens datasheet V1.10 names "2×2 binning" as a feature but ships no binning
+  register sequence; the V4.0 web flyer has zero register data.
+- NOT exhaustively searched (so NOT confirmed negatives): `scpcom/sophgo-middleware`
+  submodules beyond the mirrored cv183x; MaixPy/MaixCDK SDK source tree; Rockchip
+  rk_aiq / Ingenic T31-T40 / Hisilicon Hi35xx trees (architecturally unlikely —
+  those SoCs are ≤5MP-class; the 8MP/4K families are exactly the 3 already found).
+
+### 12.5 Consequence for the 1080p HW-ISP path (task #22)
+A sub-4K sensor mode will NOT be found ready-made; obtain it one of three ways:
+1. **1080p center-crop window** — set 0x3208/0a output size + 0x3210/12 start +
+   recompute VTS; uses only documented registers, works today, costs FOV.
+2. **Hand-derived 2×2 binning** — now lower-risk (keep the 96 invariants, change
+   only lane/bitdepth/window/timing), BUT the MIPI-PLL retune for the halved
+   data rate is still a blind spot — same class of thing only a SmartSens FAE
+   gave us reliably for the original 2-lane PLL.
+3. Ask SmartSens FAE for the binning init table.
+Stop decompiling the `.so`/`.bin` — they hold no binning data.
+
+### 12.6 AE recipe cross-checked + daytime highlight protection added (2026-06-05)
+Used the new CVITEK cv183x driver to verify our host-AE register recipe
+(`app_sc850sl.c`), then added three improvements.
+
+**Cross-check verdict — our recipe is correct.** Exposure field
+`{0x3e00[3:0],0x3e01,0x3e02[7:4]}` = lines; all six analog-gain breakpoints +
+`0x3e08` codes (`0x03/07/23/27/2f/3f` at gain x1024 = 1024/2048/3200/6400/
+12800/25600); the `0x3e09` fine mantissa; `EXP_MAX = VTS-4`; and `GAIN_MAX` =
+49.6x all match CVITEK `AgainInfo[]` / `cmos_gains_update` register-for-register.
+CVITEK's baked-in init `0x3e08=0x03 / 0x3e09=0x40` == our `SC850SL_GAIN_UNITY`
+(1.0x) AE start. (The `mean=90` setpoint is our control choice, not in any driver.)
+
+**Three changes in `app_sc850sl.c`:**
+1. **Daytime highlight protection** (the priority — large-DR daytime scenes were
+   the concern). The raw-stats scan counts near-saturated pixels
+   (>= `AE_SAT_LEVEL`=250 in the 8-bit sample) into `raw_sat_ppm`. `ae_step()`
+   gained a highlight guard: if `> AE_SAT_BUDGET_PPM` (8000 = 0.8%) of pixels
+   clip, pull brightness DOWN (gain first, then exposure, -20%/step) regardless
+   of the mean. AE mean target lowered 110->90 for headroom. New `sat=NNNppm`
+   field in the `usb_stream[...]` log to tune by.
+2. **DPC vs gain** (night): `0x363c` 0x07->0x04 below 2.0x analog gain (mirrors
+   CVITEK `cmos_gains_update`), change-detected to spare the I2C bus.
+3. **Digital-gain relay** (night, UNTESTED): past 49.6x analog, rail analog and
+   step `0x3e06` digital 2x/4x/8x (CVITEK `cmos_dgain_calc_table`) with
+   `0x3e07=0x80`; `SC850SL_GAIN_MAX` raised to ~397x. Coarse 6 dB steps, so
+   brightness stepping at the very top; daytime never reaches it.
+
+**Pending:** on-hardware verification (Olimex + FPC). Tuning constants
+(250 / 8000 ppm / target 90) are conservative starting points; the highlight
+guard may hunt slightly around the clip boundary on extreme-DR scenes.
 
 ---
 
