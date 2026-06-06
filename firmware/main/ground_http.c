@@ -202,9 +202,12 @@ static size_t                s_jin_cap;
 static uint8_t              *s_jout;    /* JPEG output   (DMA-capable) */
 static size_t                s_jout_cap;
 
-/* One composite preview frame (640x240 RGB565) + generous JPEG headroom. */
-#define JPEG_IN_MAX   (640 * 240 * 2)
-#define JPEG_OUT_MAX  (128 * 1024)
+/* Sized for the HD still (1280x720 RGB565); the 640x240 preview reuses the same
+ * buffers. Allocated once in jpeg_init() — NO per-request alloc (allocating the
+ * DMA-capable encoder memory per /capture.jpg request hung the 2nd request:
+ * the pool didn't free cleanly and the next alloc blocked). */
+#define JPEG_IN_MAX   (1280 * 720 * 2)
+#define JPEG_OUT_MAX  (384 * 1024)
 
 static esp_err_t jpeg_init(void)
 {
@@ -292,34 +295,32 @@ static esp_err_t capture_get(httpd_req_t *req)
 {
     if (!s_jpeg) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no encoder"); return ESP_FAIL; }
     const int w = 1280, h = 720;             /* HD still downscaled from the 4K frame */
-    const size_t in_sz = (size_t)w * h * 2, out_cap = 384 * 1024;
-    jpeg_encode_memory_alloc_cfg_t im = { .buffer_direction = JPEG_ENC_ALLOC_INPUT_BUFFER };
-    jpeg_encode_memory_alloc_cfg_t om = { .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER };
-    size_t ic = 0, oc = 0;
-    uint8_t *in  = jpeg_alloc_encoder_mem(in_sz,   &im, &ic);   /* ~1.8 MB, freed below */
-    uint8_t *out = jpeg_alloc_encoder_mem(out_cap, &om, &oc);
     uint32_t outlen = 0;
     bool ok = false;
-    if (in && out && ground_render_hd(in, w, h)) {
+    /* Reuse the shared encoder buffers (sized for HD) under s_jpeg_mtx — no
+     * per-request allocation. Held across the send so the preview path can't
+     * clobber s_jout mid-transfer; a one-shot HD download briefly pausing the
+     * live stream is fine. */
+    xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
+    if (ground_render_hd(s_jin, w, h)) {     /* 4K -> HD RGB565 into the shared input buf */
         jpeg_encode_cfg_t cfg = { .width = w, .height = h,
             .src_type = JPEG_ENCODE_IN_FORMAT_RGB565, .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
             .image_quality = 88, .pixel_reverse = false };
-        xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
-        ok = (jpeg_encoder_process(s_jpeg, &cfg, in, in_sz, out, oc, &outlen) == ESP_OK);
-        xSemaphoreGive(s_jpeg_mtx);
+        ok = (jpeg_encoder_process(s_jpeg, &cfg, s_jin, (size_t)w * h * 2,
+                                   s_jout, s_jout_cap, &outlen) == ESP_OK);
     }
     esp_err_t ret;
     if (ok) {
         httpd_resp_set_type(req, "image/jpeg");
         httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"sc850sl_hd.jpg\"");
-        ret = httpd_resp_send(req, (const char *)out, outlen);
+        ret = httpd_resp_send(req, (const char *)s_jout, outlen);
     } else {
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "HD capture unavailable (no frame yet, or out of memory)");
+        httpd_resp_sendstr(req, "HD capture unavailable (no frame yet)");
         ret = ESP_OK;
     }
-    free(in); free(out);
+    xSemaphoreGive(s_jpeg_mtx);
     return ret;
 }
 
