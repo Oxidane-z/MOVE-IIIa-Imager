@@ -39,3 +39,10 @@ CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=42
 # Conservative SDIO clock for first bring-up (kHz; ESP32-P4 host max 40000).
 # Bump toward 40000 once the link is proven stable.
 CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=20000
+
+# Allocate the esp_hosted SDIO transport buffer mempool from PSRAM instead of
+# internal RAM (Espressif-recommended for the ESP32-P4). Without this,
+# sdio_mempool_create() asserts at boot ("buf_mp_g") in a reboot loop once the
+# app grows enough to squeeze internal RAM — which is exactly what the full
+# P3/P4 ground station did (P2 still fit). The P4 has 32 MB PSRAM to spare.
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
