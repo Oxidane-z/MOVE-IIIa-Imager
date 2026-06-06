@@ -4,11 +4,12 @@ Ground-only convenience layer: WiFi + a browser control page + OTA, so the
 flight board can be driven and updated **without a USB cable**. Everything is
 gated behind `CONFIG_GROUND_WIFI_ENABLE` — the flight build pulls none of it.
 
-> Status (2026-06): P1 (link+STA) and P2 (telemetry+control) are
-> hardware-verified. P3 (JPEG live preview), OTA-over-WiFi, mDNS, on-demand
-> ISP, and `/api/log` are **built clean but not yet hardware-tested** (board was
-> unplugged before the flash). First job when hardware is back: one USB flash,
-> then exercise the web UI.
+> Status (2026-06-06): **fully hardware-verified.** Boot, WiFi + mDNS, camera
+> stream, telemetry/health, `/stream` (MJPEG), `/capture.jpg` (HD), `/api/log`,
+> control, and a full OTA round-trip all confirmed at `move-imager.local`. Two
+> HW-only bugs were fixed during bring-up: an esp_hosted SDIO mempool OOM
+> reboot-loop (`CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`) and a `/capture.jpg`
+> per-request-alloc hang (reuse persistent JPEG buffers).
 
 ## Hardware
 
@@ -101,8 +102,8 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 Live preview (`/stream`, `/snapshot.jpg`), OTA, `/api/log`, on-demand ISP,
 system-health telemetry + reboot + NVS-persisted settings, live colour tuning
 (AWB / WB / black-level / CCM) + focus aid, HD still (`/capture.jpg`), and
-web-triggered SSTV. All built clean — **the whole stack is pending one
-on-hardware test pass** (board was unplugged during development).
+web-triggered SSTV. **All hardware-verified (2026-06-06)** at move-imager.local,
+including a full OTA round-trip.
 
 ## Still TODO
 

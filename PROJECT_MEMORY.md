@@ -1591,7 +1591,7 @@ pre-flashed ESP-Hosted slave fw was compatible first try — **no C6 reflash**.
 - **HW-verified:** P1 link+STA (`got ip 10.200.0.121`) and P2 telemetry+control
   (`/`, `/api/tlm`, `/api/cmd`). Live timing telemetry confirmed software-ISP
   ~0.66 s, USB ~0.36 s per frame.
-- **Built clean, NOT yet HW-tested** (board unplugged before flash) — the rest
+- **HW-VERIFIED (2026-06-06)** — the rest
   of the ground station: P3 JPEG preview (`/snapshot.jpg`, MJPEG `/stream`),
   **OTA over WiFi** (`/api/ota`), mDNS+DHCP hostname (**move-imager.local**),
   `/api/log` log ring; on-demand ISP (renders only when a `/stream` viewer is up
@@ -1633,11 +1633,19 @@ Commits: `82b2102` P2 · `1ba5120` P3+OTA+mDNS+on-demand · `e3de44f` /api/log +
 guide · `1c8de7a` health+reboot+NVS · `a2e4d0e` tuning+focus · `5661117` HD
 capture · `e101b0f` SSTV trigger · `c7f4bf5` guide refresh.
 
-**NEXT (held by user):** RS422 OBC link + command dispatch (task #28 step 2) —
-new `rs422` module on UART0 (TX37/RX38/DE39), `SYNC|LEN|TYPE|SEQ|payload|CRC16`
-parser, `PING/GET_TLM/CAPTURE` dispatch. **When HW is back:** one USB flash of
-the ground build, then exercise the whole stack at move-imager.local (preview,
-HD capture, OTA round-trip, tuning, SSTV, /api/log) — it's all unverified.
+**HW verification (2026-06-06): PASS.** Flashed + exercised the whole stack at
+`move-imager.local`: boot, WiFi + mDNS, camera stream, `/api/tlm`, `/api/log`,
+`/stream` (MJPEG ~1.3 fps, on-demand ISP), `/capture.jpg` (HD 1280×720, repeatable),
+and a full **OTA round-trip** (upload → reboot into the inactive slot → back
+online, up≈22 s). Two HW-only bugs found + fixed during bring-up:
+1. esp_hosted SDIO mempool OOM reboot-loop → `CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`
+   (the grown app squeezed internal RAM) — commit `848dbd5`.
+2. `/capture.jpg` per-request `jpeg_alloc_encoder_mem` hang (pool didn't free →
+   2nd request blocked → wedged httpd) → reuse persistent JPEG buffers — `f8bf22d`.
+
+**NEXT (still held by user):** RS422 OBC link + command dispatch (task #28
+step 2) — new `rs422` module on UART0 (TX37/RX38/DE39),
+`SYNC|LEN|TYPE|SEQ|payload|CRC16` parser, `PING/GET_TLM/CAPTURE` dispatch.
 
 ---
 
