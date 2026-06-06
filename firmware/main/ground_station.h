@@ -40,6 +40,9 @@ typedef struct {
     int      reset_reason;                      /* esp_reset_reason()        */
     uint32_t focus;                             /* preview sharpness aid      */
     bool     awb_enabled;
+    float    board_temp_c;   /* AT30TS74 on LP-I2C; < -273 = unavailable        */
+    float    lwir_temp_c;    /* MI1602 SenXor die temp, last thermal view; < -273 = none */
+    bool     lwir_en;        /* LWIR (MI1602) preview capture enabled            */
 } ground_tlm_t;
 
 /* Command mailbox: server sets fields, app applies + clears once per frame.
@@ -59,6 +62,7 @@ typedef struct {
     bool sstv_trigger;  /* one-shot: kick an SSTV TX          */
     bool capture_hd;    /* one-shot: latch a full-res HD frame */
     int  stream_en;     /* 0/1: pause/resume SC850SL streaming (power/heat); <0 no change */
+    int  lwir_en;       /* 0/1: enable/disable LWIR (MI1602) preview capture; <0 no change */
 } ground_cmd_t;
 
 /* ---- app -> server (called from the camera/usb_stream task) ---- */

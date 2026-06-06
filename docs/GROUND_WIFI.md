@@ -69,7 +69,7 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 | Endpoint                       | Method | Purpose                                                       |
 |--------------------------------|--------|---------------------------------------------------------------|
 | `/`                            | GET    | tabbed control page (embedded `ground_index.html`)            |
-| `/api/tlm`                     | GET    | telemetry JSON (exp/gain/mean/sat/wb/timings/heap/ip…)        |
+| `/api/tlm`                     | GET    | telemetry JSON (exp/gain/mean/sat/wb/timings/heap/temps/ip…)  |
 | `/api/cmd`                     | POST   | control — query params below                                  |
 | `/snapshot.jpg?view=rgb\|lwir` | GET    | one on-demand JPEG of a view (default RGB 960×540, LWIR 480×360); the preview tabs poll this |
 | `/capture.jpg?res=hd\|fhd`     | GET    | full-res still download — `hd` 1280×720, `fhd` 1920×1080      |
@@ -79,8 +79,9 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 `/api/cmd` params (omit any to leave unchanged):
 - exposure/AE: `ae_target=<mean>`, `ae_en=0|1`, `exp=<lines>`, `gain=<x1024>`
 - colour: `awb=0|1`, `wb_r=<f>`, `wb_b=<f>`, `bl=<n>`, `ccm0..ccm8=<f>` (3×3)
-- ops: `stream=0|1` (camera streaming on/off — sleeps the SC850SL to save power/heat),
-  `usb=0|1` (USB push), `save=1` (persist to NVS), `reboot=1`, `sstv=1`
+- ops: `stream=0|1` (SC850SL streaming on/off — sleeps the sensor to save power/heat),
+  `lwir=0|1` (MI1602 thermal preview on/off), `usb=0|1` (USB push), `save=1` (persist to NVS),
+  `reboot=1`, `sstv=1`
 
 ## OTA over WiFi
 
@@ -119,7 +120,8 @@ cam/thermal dots, Save-to-NVS, Reboot):
 - **RGB camera** — polled hi-res preview (960×540) + a **camera-streaming on/off
   switch** (off = sleep the SC850SL to cut power + sensor heat; preview pauses,
   telemetry/console stay live) + full-res download buttons (HD / FHD) + SSTV trigger.
-- **LWIR camera** — polled thermal preview. NOTE: the MI1602 readout path works,
+- **LWIR camera** — polled thermal preview + a **thermal-streaming on/off switch**
+  (`lwir=0|1`; off stops polling the MI1602). NOTE: the MI1602 readout path works,
   but the MI48 isn't yet producing a calibrated frame (task #27), so this shows
   live *uncalibrated* FPA noise until thermal bring-up finishes — not a fault.
 - **Image tuning** — AWB toggle, WB R/B, black level, 3×3 CCM.
@@ -129,6 +131,12 @@ cam/thermal dots, Save-to-NVS, Reboot):
 
 Only the active tab's heavy poller runs, so switching tabs is what starts/stops
 each preview or the log tail.
+
+The telemetry dashboard also shows two temperatures: **board** (AT30TS74 @0x48
+on LP-I2C, SCL=GPIO7 / SDA=GPIO1, read by `board_temp_task` — the HP-core stand-in
+for the flight LP-core path) and **LWIR die** (MI1602 SenXor temp latched from the
+last thermal view; shows n/a while the MI48 header CRC fails — task #27). The
+SC850SL exposes no readable die-temp register, so it isn't shown.
 
 ## Done since P2
 

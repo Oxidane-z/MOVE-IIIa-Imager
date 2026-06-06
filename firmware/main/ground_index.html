@@ -81,6 +81,8 @@
   <span class="chip"><b>heap</b><span id="t_heap">-</span></span>
   <span class="chip"><b>PSRAM</b><span id="t_psram">-</span></span>
   <span class="chip"><b>reset</b><span id="t_reset">-</span></span>
+  <span class="chip"><b>board</b><span id="t_btemp">-</span></span>
+  <span class="chip"><b>LWIR die</b><span id="t_ltemp">-</span></span>
 </div>
 
 <nav class="tabs">
@@ -110,6 +112,8 @@
 <!-- LWIR camera -->
 <section class="panel" id="tab-lwir">
   <h2>LWIR preview (thermal, MI1602)</h2>
+  <div class="row"><label><input type="checkbox" id="lwirtog" checked onchange="setLwir(this.checked)"> thermal streaming
+    <span style="color:#8a93a3">- turn off to stop polling the MI1602</span></label></div>
   <img id="lwirimg" class="preview" alt="LWIR preview">
   <div class="pmsg" id="lwirmsg">loading thermal...</div>
   <div class="hint">Live raw output from the MI1602 FPA (160x120, twilight colormap, nearest-neighbour upscaled). The MI48 ASIC is not yet producing a calibrated frame (task #27), so until thermal bring-up is finished expect uncalibrated noise rather than a real scene - the I2C + SPI readout path itself is confirmed working. If the camera is absent the endpoint returns 503 and this shows "thermal offline".</div>
@@ -176,8 +180,10 @@ let activeTab = 'rgb';
 let gen = 0;            // bumps on every tab switch so stale poll chains stop
 let firstTlm = true;    // seed editable fields from telemetry once
 let streamOn = true;    // mirrors telemetry; gates the RGB preview poll
+let lwirOn  = true;     // mirrors telemetry; gates the LWIR preview poll
 
 function setStream(on){ streamOn = on; cmd('stream=' + (on ? 1 : 0)); }
+function setLwir(on){   lwirOn   = on; cmd('lwir='   + (on ? 1 : 0)); }
 
 async function cmd(qs){
   try { await fetch('/api/cmd?'+qs, {method:'POST'}); } catch(e){}
@@ -192,6 +198,10 @@ async function poll(){
     $('d_thermal').className = 'dot ' + (t.thermal ? 'on':'bad');
     streamOn = !!t.stream;
     $('streamtog').checked = streamOn;
+    lwirOn = !!t.lwir_en;
+    $('lwirtog').checked = lwirOn;
+    $('t_btemp').textContent = (t.board_temp == null) ? 'n/a' : t.board_temp.toFixed(1) + ' °C';
+    $('t_ltemp').textContent = (t.lwir_temp  == null) ? 'n/a' : t.lwir_temp.toFixed(1)  + ' °C';
     $('t_ip').textContent    = t.ip;
     $('t_rssi').textContent  = t.rssi + ' dBm';
     $('t_up').textContent    = fmtUp(t.up);
@@ -229,6 +239,13 @@ function loadPreview(view, g){
     const m = $('rgbmsg'); m.style.display = 'block';
     m.textContent = 'camera paused (streaming off) - toggle on to resume';
     setTimeout(() => loadPreview(view, g), 1000);   // re-check; resumes when streaming returns
+    return;
+  }
+  if (view === 'lwir' && !lwirOn){
+    $('lwirimg').style.display = 'none';
+    const m = $('lwirmsg'); m.style.display = 'block';
+    m.textContent = 'thermal paused (toggle on to resume)';
+    setTimeout(() => loadPreview(view, g), 1000);
     return;
   }
   const img = $(view+'img'), msg = $(view+'msg');

@@ -119,6 +119,11 @@ static esp_err_t tlm_get(httpd_req_t *req)
     int rssi = 0; wifi_ap_record_t ap;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
 
+    /* Temperatures: emit JSON null when unavailable (sentinel < -273) so the
+     * page shows n/a rather than a bogus reading. */
+    char bt[12], lt[12];
+    if (t.board_temp_c < -273.0f) strcpy(bt, "null"); else snprintf(bt, sizeof bt, "%.1f", t.board_temp_c);
+    if (t.lwir_temp_c  < -273.0f) strcpy(lt, "null"); else snprintf(lt, sizeof lt, "%.1f", t.lwir_temp_c);
     char buf[700];
     int n = snprintf(buf, sizeof buf,
         "{\"ok\":%d,\"ip\":\"%s\",\"rssi\":%d,\"up\":%lld,"
@@ -127,7 +132,7 @@ static esp_err_t tlm_get(httpd_req_t *req)
         "\"ae_target\":%d,\"ae_en\":%d,\"cap_us\":%lld,\"isp_us\":%lld,\"usb_us\":%lld,"
         "\"stream\":%d,\"thermal\":%d,"
         "\"heap\":%u,\"heap_min\":%u,\"psram\":%u,\"reset\":%d,"
-        "\"focus\":%u,\"awb\":%d}",
+        "\"focus\":%u,\"awb\":%d,\"board_temp\":%s,\"lwir_temp\":%s,\"lwir_en\":%d}",
         v ? 1 : 0, ip, rssi, (long long)(esp_timer_get_time() / 1000000),
         (unsigned)t.seq, (unsigned)t.w, (unsigned)t.h,
         t.raw_min, t.raw_max, t.raw_mean, t.raw_sat_ppm,
@@ -136,7 +141,7 @@ static esp_err_t tlm_get(httpd_req_t *req)
         (long long)t.t_cap_us, (long long)t.t_isp_us, (long long)t.t_usb_us,
         t.cam_streaming ? 1 : 0, t.thermal_ok ? 1 : 0,
         (unsigned)t.heap_free, (unsigned)t.heap_min, (unsigned)t.psram_free, t.reset_reason,
-        (unsigned)t.focus, t.awb_enabled ? 1 : 0);
+        (unsigned)t.focus, t.awb_enabled ? 1 : 0, bt, lt, t.lwir_en ? 1 : 0);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
@@ -200,6 +205,7 @@ static esp_err_t cmd_post(httpd_req_t *req)
         .sstv_trigger = qparam(req, "sstv",       0) != 0,
         .capture_hd   = qparam(req, "capture",    0) != 0,
         .stream_en    = qparam(req, "stream",    -1),
+        .lwir_en      = qparam(req, "lwir",      -1),
     };
     ground_cmd_post(&c);
     httpd_resp_set_type(req, "application/json");

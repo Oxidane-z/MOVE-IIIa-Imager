@@ -53,6 +53,7 @@
 #include "esp_cam_ctlr.h"
 #include "esp_cam_ctlr_csi.h"
 #include "soc/isp_struct.h"   /* IDF-9706: direct ISP register pokes for bypass mode */
+#include "soc/clk_tree_defs.h" /* LP_I2C_SCLK_DEFAULT for the board-temp LP-I2C bus */
 
 #include "sc850sl.h"
 #include "sstv_robot36.h"
@@ -145,6 +146,12 @@ static volatile bool     g_cam_ready  = false;
  * the sensor runs hot. The free-running CSI controller is left armed and
  * auto-resumes when the sensor wakes. Not persisted: a fresh boot streams. */
 static volatile bool     g_stream_en  = true;
+/* LWIR (MI1602) preview enable — web /api/cmd?lwir=0|1. Gates ground_render_lwir
+ * so a paused LWIR tab stops capturing thermal frames. Default on. */
+static volatile bool     g_lwir_en    = true;
+/* Board temperature (AT30TS74 on LP-I2C), Celsius, for the web telemetry;
+ * -300 sentinel = unavailable. Filled by board_temp_task. */
+static volatile float    g_board_temp_c = -300.0f;
 
 /* MIPI CSI + ISP pipeline state. */
 static esp_ldo_channel_handle_t g_mipi_ldo = NULL;
@@ -1288,6 +1295,7 @@ static void usb_stream_send(int cycle)
                     }
                 }
             }
+            if (gc.lwir_en >= 0) g_lwir_en = (gc.lwir_en != 0);   /* gate the LWIR preview */
         }
     }
 #endif
@@ -1426,6 +1434,8 @@ static void usb_stream_send(int cycle)
             .psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
             .reset_reason = (int)esp_reset_reason(),
             .focus = g_focus, .awb_enabled = g_awb_enabled,
+            .board_temp_c = g_board_temp_c, .lwir_temp_c = mi1602_aux_temp_c(),
+            .lwir_en = g_lwir_en,
         };
         ground_publish_tlm(&tlm);
     }
@@ -1671,8 +1681,51 @@ bool ground_render_hd(void *dst, int w, int h)
  * mi1602_aux_capture_rgb565 owns its own I2C/frame buffer. */
 bool ground_render_lwir(void *dst, int w, int h)
 {
-    if (!dst) return false;
+    if (!dst || !g_lwir_en) return false;   /* web LWIR switch */
     return mi1602_aux_capture_rgb565((uint16_t *)dst, w, h, w) == ESP_OK;
+}
+
+/* Board-temperature housekeeping: read the AT30TS74 (0x48) on the LP-I2C bus
+ * (SCL=GPIO7, SDA=GPIO1 — the flight wiring; see FLIGHT_ARCHITECTURE.md) every
+ * 2 s into g_board_temp_c for the web telemetry. This is the ground-test
+ * stand-in for the flight LP-core path (task #28): same sensor + pins, just
+ * HP-core driven for now. Self-contained + fail-soft — if the LP-I2C bus or the
+ * device won't come up it logs once and exits, leaving the -300 "n/a" sentinel. */
+static void board_temp_task(void *arg)
+{
+    (void)arg;
+    i2c_master_bus_config_t bcfg = {
+        .i2c_port          = LP_I2C_NUM_0,
+        .scl_io_num        = GPIO_NUM_7,
+        .sda_io_num        = GPIO_NUM_1,
+        .lp_source_clk     = LP_I2C_SCLK_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus = NULL;
+    esp_err_t r = i2c_new_master_bus(&bcfg, &bus);
+    if (r != ESP_OK) {
+        ESP_LOGW(TAG, "AT30TS74: LP-I2C bus init failed (%s) — board temp n/a", esp_err_to_name(r));
+        vTaskDelete(NULL); return;
+    }
+    i2c_device_config_t dcfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                                 .device_address = 0x48, .scl_speed_hz = 100000 };
+    i2c_master_dev_handle_t dev = NULL;
+    if (i2c_master_bus_add_device(bus, &dcfg, &dev) != ESP_OK) {
+        ESP_LOGW(TAG, "AT30TS74: add_device failed — board temp n/a");
+        vTaskDelete(NULL); return;
+    }
+    ESP_LOGI(TAG, "AT30TS74 board-temp on LP-I2C (SCL=7 SDA=1) addr 0x48");
+    while (1) {
+        uint8_t ptr = 0x00, rx[2] = {0, 0};   /* pointer 0x00 = temperature reg */
+        if (i2c_master_transmit_receive(dev, &ptr, 1, rx, sizeof rx, 100) == ESP_OK) {
+            int16_t raw = (int16_t)(((uint16_t)rx[0] << 8) | rx[1]);
+            g_board_temp_c = (float)(raw >> 4) * 0.0625f;   /* 12-bit, left-justified */
+        } else {
+            g_board_temp_c = -300.0f;   /* read failed -> n/a */
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
 }
 #endif
 
@@ -2048,6 +2101,12 @@ idle:
      * Deferring WiFi until the sensor is already streaming decouples the two.
      * No-op stub in the flight build (CONFIG_GROUND_WIFI_ENABLE off). */
     ground_wifi_start();
+
+#if CONFIG_GROUND_WIFI_ENABLE
+    /* Board-temperature reader (AT30TS74 on LP-I2C). Own low-priority task so a
+     * slow/absent sensor never stalls the camera or web paths. */
+    xTaskCreate(board_temp_task, "boardtemp", 3072, NULL, 2, NULL);
+#endif
 
     /* Heartbeat: 1 Hz blink so we can see at a glance the firmware is alive.
      * After a ~5 s burn-in (firmware reached steady state without crashing),

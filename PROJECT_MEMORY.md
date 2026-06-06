@@ -1685,6 +1685,22 @@ low RSSI (≲ -80 dBm) the C6 STA can flap connect/reconnect, and a marginal USB
 rail can brown out under camera+radio load — keep the board near the AP on solid
 power.
 
+**Temps + LWIR switch (2026-06-06, follow-on).** Added a board-temperature
+readout (AT30TS74 @0x48 on **LP-I2C, SCL=GPIO7 / SDA=GPIO1**) driven from the
+**HP core** via the standard `i2c_master` driver — LP_I2C master from the HP core
+works on P4 (`i2c_port = LP_I2C_NUM_0`, `lp_source_clk = LP_I2C_SCLK_DEFAULT`).
+This is the ground stand-in for the flight LP-core path (task #28): same sensor +
+pins, HP-driven for now. `board_temp_task` reads it every 2 s; fail-soft (-300
+sentinel → JSON null → "n/a"). Also surfaced the MI1602 **SenXor die temp**
+(latched from the thermal frame header in `mi1602_aux_capture_rgb565`; gated on
+`hdr.crc_ok`, so it shows n/a while the MI48 is unhealthy — task #27). SC850SL has
+no readable die-temp register → omitted (checked the reference driver). Added an
+**LWIR streaming on/off** switch (`lwir=0|1`, gates `ground_render_lwir`) mirroring
+the SC850SL one. Deployed + verified over OTA: `board_temp` ~37 C live, LWIR toggle
+503/200. CSI/power note: the armed CSI controller is P4-side only; `sc850sl_sleep`
+powers down the sensor itself (the hot part), so pausing genuinely cuts sensor
+power/heat — the live board temp is the feedback.
+
 ---
 
 - ESP-IDF v6.0.1 release: <https://github.com/espressif/esp-idf/releases/tag/v6.0.1>

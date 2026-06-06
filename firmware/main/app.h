@@ -44,6 +44,9 @@ void mi1602_try_probe(i2c_master_bus_handle_t shared_bus);
 esp_err_t mi1602_aux_capture_rgb565(uint16_t *dst, int dw, int dh,
                                     int dst_stride);
 bool      mi1602_aux_available(void);
+/* Latched SenXor (MI48) die temperature in Celsius from the last thermal
+ * capture; < -273 if none captured yet / header invalid. For ground telemetry. */
+float     mi1602_aux_temp_c(void);
 
 #ifdef __cplusplus
 }

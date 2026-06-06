@@ -28,6 +28,12 @@ static const char *TAG = "mi1602_probe";
  * pull thermal frames. NULL until mi1602_try_probe() succeeds. */
 static mi1602_handle_t g_mi1602 = NULL;
 
+/* Latched SenXor (MI48) die temperature in Celsius from the most recent thermal
+ * capture's frame header; -300 (sentinel) until a valid frame is read. Shown in
+ * the web telemetry. Updated opportunistically inside mi1602_aux_capture_rgb565
+ * so there's no extra MI1602 traffic when nobody is viewing the thermal preview. */
+static volatile float s_aux_temp_c = -300.0f;
+
 /* Board glue: the carrier routes the MI48 MODE strap to a GPIO. MODE
  * must be LOW (GND) to select the I²C-control + SPI-data host interface.
  *
@@ -222,10 +228,13 @@ esp_err_t mi1602_aux_capture_rgb565(uint16_t *dst, int dw, int dh, int dst_strid
 {
     if (!g_mi1602) return ESP_ERR_INVALID_STATE;
 
-    /* One 160×120 16-bit dK frame (no header → saves 320 bytes/frame). */
+    /* Pull a frame + its header — the header carries the SenXor die temperature,
+     * which we latch for the web telemetry (cheap; only on a thermal view). */
     static uint16_t px[MI1602_FPA_PIXELS];
-    esp_err_t r = mi1602_capture_single(g_mi1602, px, NULL);
+    mi1602_frame_header_t hdr;
+    esp_err_t r = mi1602_capture_single(g_mi1602, px, &hdr);
     if (r != ESP_OK) return r;
+    if (hdr.crc_ok) s_aux_temp_c = hdr.senxor_temperature - 273.15f;  /* K -> C */
 
     /* Auto-range over the frame for the colormap. */
     uint16_t mn = 0xffff, mx = 0;
@@ -253,6 +262,8 @@ esp_err_t mi1602_aux_capture_rgb565(uint16_t *dst, int dw, int dh, int dst_strid
     return ESP_OK;
 }
 
+float mi1602_aux_temp_c(void) { return s_aux_temp_c; }
+
 #else  /* !CONFIG_MI1602_ENABLED */
 
 void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
@@ -265,5 +276,6 @@ esp_err_t mi1602_aux_capture_rgb565(uint16_t *dst, int dw, int dh, int dst_strid
     (void)dst; (void)dw; (void)dh; (void)dst_stride;
     return ESP_ERR_NOT_SUPPORTED;
 }
+float mi1602_aux_temp_c(void) { return -300.0f; }
 
 #endif
