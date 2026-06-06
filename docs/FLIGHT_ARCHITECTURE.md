@@ -15,7 +15,7 @@
 | Thermal cam | Meridian **MI1602 / MI48** (160×120) | **I2C1** control + **SPI2** data, DATA_READY GPIO8 | I²C addr 0x40/0x41 **auto-detected** (ADDR strap floats) |
 | Audio/SSTV | PCM5102A DAC | **I2S** (MCLK20/BCK21/LRCK23/DIN22) | Robot36 SSTV TX out the audio chain |
 | OBC link | RS422 transceiver | **UART0: TX=GPIO37, RX=GPIO38, DE=GPIO39** | the lifeline; full-duplex (RX always-on, DE gates TX); console is on USB so U0 is free |
-| Board temp | Microchip **AT30TS74** | **LP-I²C (I2C2): SDA=LP_GPIO7, SCL=LP_GPIO8**, addr **0x48** | read by the LP core for health telemetry (works while HP cores sleep) |
+| Board temp | Microchip **AT30TS74** | **LP-I²C: SCL=LP_GPIO7, SDA=LP_GPIO1**, addr **0x48** | read by the LP core for health telemetry (works while HP cores sleep). LP_GPIO8 avoided — it is MI1602 DATA_READY. |
 | Ground WiFi | ESP32-C6 addon | **SDIO** (esp_wifi_remote / ESP-Hosted) | **ground test only**, not populated/active in flight |
 | Storage | internal flash | dual-OTA + FAT `storage` | see §12 OTA |
 

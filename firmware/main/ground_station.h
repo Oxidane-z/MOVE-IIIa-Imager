@@ -58,6 +58,7 @@ typedef struct {
     bool  set_ccm;
     bool sstv_trigger;  /* one-shot: kick an SSTV TX          */
     bool capture_hd;    /* one-shot: latch a full-res HD frame */
+    int  stream_en;     /* 0/1: pause/resume SC850SL streaming (power/heat); <0 no change */
 } ground_cmd_t;
 
 /* ---- app -> server (called from the camera/usb_stream task) ---- */

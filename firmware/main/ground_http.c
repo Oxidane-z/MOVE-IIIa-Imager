@@ -199,6 +199,7 @@ static esp_err_t cmd_post(httpd_req_t *req)
                  qparamf(req,"ccm6",0), qparamf(req,"ccm7",0), qparamf(req,"ccm8",0) },
         .sstv_trigger = qparam(req, "sstv",       0) != 0,
         .capture_hd   = qparam(req, "capture",    0) != 0,
+        .stream_en    = qparam(req, "stream",    -1),
     };
     ground_cmd_post(&c);
     httpd_resp_set_type(req, "application/json");

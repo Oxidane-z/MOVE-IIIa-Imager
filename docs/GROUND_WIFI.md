@@ -79,7 +79,8 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 `/api/cmd` params (omit any to leave unchanged):
 - exposure/AE: `ae_target=<mean>`, `ae_en=0|1`, `exp=<lines>`, `gain=<x1024>`
 - colour: `awb=0|1`, `wb_r=<f>`, `wb_b=<f>`, `bl=<n>`, `ccm0..ccm8=<f>` (3×3)
-- ops: `usb=0|1` (USB push), `save=1` (persist to NVS), `reboot=1`, `sstv=1`
+- ops: `stream=0|1` (camera streaming on/off — sleeps the SC850SL to save power/heat),
+  `usb=0|1` (USB push), `save=1` (persist to NVS), `reboot=1`, `sstv=1`
 
 ## OTA over WiFi
 
@@ -115,8 +116,9 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 Six tabs over a persistent telemetry dashboard + a status bar (connection,
 cam/thermal dots, Save-to-NVS, Reboot):
 
-- **RGB camera** — polled hi-res preview (960×540) + full-res download buttons
-  (HD / FHD) + SSTV trigger.
+- **RGB camera** — polled hi-res preview (960×540) + a **camera-streaming on/off
+  switch** (off = sleep the SC850SL to cut power + sensor heat; preview pauses,
+  telemetry/console stay live) + full-res download buttons (HD / FHD) + SSTV trigger.
 - **LWIR camera** — polled thermal preview. NOTE: the MI1602 readout path works,
   but the MI48 isn't yet producing a calibrated frame (task #27), so this shows
   live *uncalibrated* FPA noise until thermal bring-up finishes — not a fault.

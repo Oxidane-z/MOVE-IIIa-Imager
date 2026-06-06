@@ -139,6 +139,12 @@ static uint16_t         *g_sstv_image = NULL;     /* 320×240 RGB565 Robot36 */
 static uint16_t         *g_capture_buf = NULL;    /* CAPTURE_W×CAPTURE_H RGB565 */
 static sc850sl_handle_t  g_cam        = NULL;
 static volatile bool     g_cam_ready  = false;
+/* Web "camera streaming" switch (ground UI /api/cmd?stream=0|1). Default on.
+ * When off, the camera task sleeps the SC850SL (sc850sl_sleep) and skips the
+ * per-cycle 4K capture + raw scan + AE — the dominant power draw and the reason
+ * the sensor runs hot. The free-running CSI controller is left armed and
+ * auto-resumes when the sensor wakes. Not persisted: a fresh boot streams. */
+static volatile bool     g_stream_en  = true;
 
 /* MIPI CSI + ISP pipeline state. */
 static esp_ldo_channel_handle_t g_mipi_ldo = NULL;
@@ -1230,58 +1236,15 @@ static void usb_stream_send(int cycle)
      * deltas get logged, on the 1/30 throttle below. Useful for sizing the
      * multicore flight schedule and as a baseline to compare any future
      * hardware-ISP path against. */
-    int64_t t_cap0 = esp_timer_get_time();
+    int64_t t_cap0 = 0, t_cap1 = 0;
+    int raw_mean = 0, raw_min = 0, raw_max = 0, raw_sat_ppm = 0;
+    bool fresh = false;   /* got a real captured frame this cycle? */
 
-    /* Capture a fresh frame, then downscale to 320×240 for the stream. */
-    esp_err_t r = camera_capture_frame(g_capture_buf);
-    if (r != ESP_OK) {
-        ESP_LOGW(TAG, "usb_stream[%d]: capture failed: %s",
-                 cycle, esp_err_to_name(r));
-        return;
-    }
-    int64_t t_cap1 = esp_timer_get_time();   /* sensor-wait + DMA transfer */
-    /* Diagnostic: scan the raw capture buffer for min/max/mean so we can
-     * tell underexposure (all near 0) from a data-extraction bug (exactly
-     * 0 everywhere) from a healthy signal (spread of values). Sample the
-     * high bytes across the whole RAW10-packed frame (every 5th byte =
-     * the LSB-packing byte is skipped; we step by a stride to keep it
-     * cheap). */
-    int raw_mean = 0, raw_min = 255, raw_max = 0, raw_sat_ppm = 0;
-    {
-        const uint8_t *raw = (const uint8_t *)g_capture_buf;
-        size_t raw_bytes = (size_t)CAPTURE_W * CAPTURE_H * 10 / 8;
-        uint8_t mn = 255, mx = 0;
-        uint64_t sum = 0; uint32_t cnt = 0, sat = 0;
-        for (size_t i = 0; i < raw_bytes; i += 97) {  /* prime stride */
-            if ((i % 5) == 4) continue;   /* skip RAW10 LSB-packing byte, so
-                                           * min/mean reflect real pixel
-                                           * values — this is what you read
-                                           * off a lens-capped dark frame to
-                                           * calibrate g_black_level */
-            uint8_t v = raw[i];
-            if (v < mn) mn = v;
-            if (v > mx) mx = v;
-            if (v >= AE_SAT_LEVEL) ++sat;   /* near-full-scale (clipping) pixel */
-            sum += v; ++cnt;
-        }
-        raw_mean = cnt ? (int)(sum / cnt) : 0;
-        raw_min  = mn;
-        raw_max  = mx;
-        raw_sat_ppm = cnt ? (int)((uint64_t)sat * 1000000u / cnt) : 0;
-        /* min/max/mean now ride in the frame header (host overlays them), so
-         * there's no per-frame log line here — that keeps the wire clean
-         * between frames. A throttled summary still prints 1/30 below. */
-    }
-
-    /* Host auto-exposure: drive the sensor's exposure + analog gain toward the
-     * target raw mean (clean 10-bit analog domain, vs the old software-gain
-     * multiply that posterized). Throttled to every 4th frame — the scene
-     * doesn't change fast, and it bounds the per-frame I2C write load on the
-     * flaky SC850SL bus (which, hammered every frame, was stalling and
-     * watchdog-resetting the board). */
 #if CONFIG_GROUND_WIFI_ENABLE
-    /* Apply any pending web-control command (ground-test only) before AE runs,
-     * so a manual exposure/gain or AE-target change takes effect this frame. */
+    /* Drain pending web-control commands FIRST — every cycle, even while the
+     * stream is paused — so the streaming toggle (and any other control) is
+     * always honoured. (Was after the capture; moved up so a resume command
+     * doesn't need a frame to land.) */
     {
         ground_cmd_t gc;
         if (ground_cmd_take(&gc)) {
@@ -1307,10 +1270,72 @@ static void usb_stream_send(int cycle)
             }
             if (gc.sstv_trigger) g_sstv_req = true;   /* one-shot SSTV TX */
             /* gc.capture_hd unused: the HD still is the synchronous /capture.jpg. */
+            /* Camera streaming on/off — the web power/heat switch. Sleep/wake
+             * the sensor (sc850sl_sleep stops streaming + drops it into the
+             * datasheet low-power state). Act only on a real change, to spare
+             * the flaky port-0 I2C. The free-running CSI controller is left
+             * armed; it just gets no frames while asleep and auto-resumes on
+             * wake (a few settling frames, then AE re-converges). */
+            if (gc.stream_en >= 0) {
+                bool want = (gc.stream_en != 0);
+                if (want != g_stream_en) {
+                    g_stream_en = want;
+                    if (g_cam) {
+                        if (want) { sc850sl_wake(g_cam);
+                                    ESP_LOGI(TAG, "camera streaming RESUMED (web)"); }
+                        else      { sc850sl_sleep(g_cam);
+                                    ESP_LOGI(TAG, "camera streaming PAUSED (web — sensor sleep, power/heat save)"); }
+                    }
+                }
+            }
         }
     }
 #endif
-    if ((cycle % 4) == 0) ae_step(raw_mean, raw_sat_ppm);
+
+    /* Heavy path runs only while streaming. Paused: skip the 4K DMA wait + the
+     * raw-stats scan entirely (that, with the sensor sleep above, is the power/
+     * heat win) and fall through to publish a 'paused' telemetry so the web UI
+     * stays live and can resume. A capture hiccup no longer returns early — we
+     * still publish telemetry so the dashboard never freezes. */
+    if (g_stream_en) {
+        t_cap0 = esp_timer_get_time();
+        esp_err_t r = camera_capture_frame(g_capture_buf);
+        if (r != ESP_OK) {
+            ESP_LOGW(TAG, "usb_stream[%d]: capture failed: %s",
+                     cycle, esp_err_to_name(r));
+        } else {
+            t_cap1 = esp_timer_get_time();   /* sensor-wait + DMA transfer */
+            fresh  = true;
+            raw_min = 255;
+            /* Scan the raw capture buffer for min/max/mean/clipping: tells
+             * underexposure (all near 0) from an extraction bug (exactly 0)
+             * from a healthy signal (a spread). Prime stride + skip the RAW10
+             * LSB-packing byte so the stats reflect real pixel values (this is
+             * what you read off a lens-capped dark frame to set black level). */
+            const uint8_t *raw = (const uint8_t *)g_capture_buf;
+            size_t raw_bytes = (size_t)CAPTURE_W * CAPTURE_H * 10 / 8;
+            uint8_t mn = 255, mx = 0;
+            uint64_t sum = 0; uint32_t cnt = 0, sat = 0;
+            for (size_t i = 0; i < raw_bytes; i += 97) {  /* prime stride */
+                if ((i % 5) == 4) continue;   /* skip RAW10 LSB-packing byte */
+                uint8_t v = raw[i];
+                if (v < mn) mn = v;
+                if (v > mx) mx = v;
+                if (v >= AE_SAT_LEVEL) ++sat;   /* near-full-scale (clipping) */
+                sum += v; ++cnt;
+            }
+            raw_mean = cnt ? (int)(sum / cnt) : 0;
+            raw_min  = mn;
+            raw_max  = mx;
+            raw_sat_ppm = cnt ? (int)((uint64_t)sat * 1000000u / cnt) : 0;
+        }
+    }
+
+    /* Host auto-exposure: drive exposure + analog gain toward the target raw
+     * mean (clean 10-bit analog domain). Throttled to every 4th frame — the
+     * scene is slow and it bounds the per-frame I2C write load on the flaky
+     * SC850SL bus. Only on a fresh frame (skipped entirely while paused). */
+    if (fresh && (cycle % 4) == 0) ae_step(raw_mean, raw_sat_ppm);
 
     /* Render the composite preview (RGB | thermal) ONLY when something will
      * consume it: a web /stream client, or the legacy USB push. Otherwise skip
@@ -1325,7 +1350,7 @@ static void usb_stream_send(int cycle)
     if (ground_preview_clients() > 0) want_preview = true;
 #endif
 
-    if (want_preview) {
+    if (want_preview && fresh) {
         /* LEFT pane: RGB. demosaic + box-filter + AWB + gamma — the "software
          * ISP" whose per-frame cost we time as t_ds1 - t_ds0. */
         t_ds0 = esp_timer_get_time();
@@ -1395,7 +1420,7 @@ static void usb_stream_send(int cycle)
             .ae_target = g_ae_target, .ae_enabled = g_ae_enabled,
             .t_cap_us = t_cap1 - t_cap0, .t_isp_us = t_ds1 - t_ds0,
             .t_usb_us = t_usb1 - t_usb0,
-            .cam_streaming = g_cam_ready, .thermal_ok = (tr == ESP_OK),
+            .cam_streaming = (g_stream_en && g_cam_ready), .thermal_ok = (tr == ESP_OK),
             .heap_free  = (uint32_t)esp_get_free_heap_size(),
             .heap_min   = (uint32_t)esp_get_minimum_free_heap_size(),
             .psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
