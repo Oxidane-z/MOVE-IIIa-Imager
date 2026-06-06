@@ -74,12 +74,16 @@ bool   ground_cmd_take(ground_cmd_t *out);
 bool   ground_tlm_snapshot(ground_tlm_t *out);
 size_t ground_preview_copy(void *dst, size_t maxbytes, uint16_t *w, uint16_t *h);
 void   ground_cmd_post(const ground_cmd_t *cmd);
-/* Active /stream (MJPEG) client count; the camera task uses it to skip the
- * software-ISP render when nobody is watching. */
+/* Legacy preview-client count (the MJPEG /stream is gone; previews are now
+ * poll-based /snapshot.jpg rendered in the httpd worker). Stays 0 unless the
+ * USB push is on, so the camera task's want_preview gate stays off. */
 int    ground_preview_clients(void);
-/* Downscale the latest full-res capture to a w*h RGB565 still in dst (for the
- * web HD capture). Returns false if no frame is available. In app_sc850sl.c. */
+/* Render the latest capture to a w*h RGB565 still in dst, for the web preview /
+ * full-res download. ground_render_hd = visible (software ISP); ground_render_lwir
+ * = thermal (MI1602). Return false if no frame is available / camera offline.
+ * Both in app_sc850sl.c. */
 bool   ground_render_hd(void *dst, int w, int h);
+bool   ground_render_lwir(void *dst, int w, int h);
 
 /* Start the web server. Call once the station has an IP; idempotent. */
 esp_err_t ground_http_start(void);

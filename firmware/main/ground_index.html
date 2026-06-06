@@ -3,118 +3,176 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MOVE-IIIa Imager — Ground Station</title>
+<title>MOVE-IIIa Imager - Ground Station</title>
 <style>
   :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
   body { margin:0; font:14px/1.4 system-ui,sans-serif; background:#11141a; color:#dfe3ea; }
-  header { padding:10px 16px; background:#0b0d12; border-bottom:1px solid #222; }
-  h1 { margin:0; font-size:16px; font-weight:600; }
-  #status { font-size:12px; color:#9aa3b2; margin-top:4px; }
-  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#555; margin:0 2px 0 8px; vertical-align:middle; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+           padding:10px 16px; background:#0b0d12; border-bottom:1px solid #222; }
+  h1 { margin:0; font-size:16px; font-weight:600; flex:1 1 auto; }
+  #status { font-size:12px; color:#9aa3b2; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#555; margin:0 3px 0 8px; vertical-align:middle; }
   .dot.on { background:#39d353; } .dot.bad { background:#e5534b; }
-  main { display:flex; flex-wrap:wrap; gap:16px; padding:16px; }
-  .card { background:#171b22; border:1px solid #232936; border-radius:8px; padding:12px 14px; }
-  .card h2 { margin:0 0 8px; font-size:13px; color:#9aa3b2; text-transform:uppercase; letter-spacing:.04em; }
-  #preview { min-width:340px; } #prev { width:100%; max-width:640px; background:#000; border-radius:4px; display:block; }
-  #prevmsg { color:#9aa3b2; font-size:12px; padding:40px 8px; text-align:center; }
-  .grid { display:grid; grid-template-columns:auto auto; gap:2px 18px; font-variant-numeric:tabular-nums; }
-  .grid span:nth-child(odd) { color:#9aa3b2; }
-  .row { margin:6px 0; } label { color:#9aa3b2; margin-right:6px; }
-  input[type=number] { width:84px; background:#0b0d12; color:#dfe3ea; border:1px solid #2a3140; border-radius:4px; padding:4px 6px; }
-  button { background:#2563eb; color:#fff; border:0; border-radius:4px; padding:6px 12px; cursor:pointer; margin:2px; }
-  button.alt { background:#374151; } button:active { transform:translateY(1px); }
-  #log { background:#0b0d12; border:1px solid #232936; border-radius:4px; padding:8px; height:200px; overflow:auto;
-         white-space:pre-wrap; font:11px/1.35 ui-monospace,monospace; color:#b8c0cc; }
+
+  /* telemetry dashboard - always visible, independent of the active tab */
+  .tlm { display:flex; flex-wrap:wrap; gap:6px 8px; padding:10px 16px; background:#0e1117; border-bottom:1px solid #1c2230; }
+  .chip { background:#171b22; border:1px solid #232936; border-radius:6px; padding:3px 9px; font-size:12px; font-variant-numeric:tabular-nums; }
+  .chip b { color:#8a93a3; font-weight:500; margin-right:6px; }
+
+  /* tab bar + panels */
+  .tabs { display:flex; gap:2px; padding:0 10px; background:#0b0d12; border-bottom:1px solid #222; flex-wrap:wrap; }
+  .tabbtn { background:none; border:0; color:#9aa3b2; padding:11px 15px; cursor:pointer;
+            border-bottom:2px solid transparent; font-size:13px; }
+  .tabbtn:hover { color:#cfd6e2; }
+  .tabbtn.active { color:#fff; border-bottom-color:#2563eb; }
+  .panel { display:none; padding:16px; max-width:1100px; }
+  .panel.show { display:block; }
+  .panel h2 { margin:0 0 10px; font-size:13px; color:#9aa3b2; text-transform:uppercase; letter-spacing:.04em; }
+  .panel h2.sub { margin-top:18px; }
+
+  .preview { width:100%; background:#000; border-radius:6px; display:none; }
+  #rgbimg  { max-width:960px; } #lwirimg { max-width:640px; image-rendering:pixelated; }
+  .pmsg { color:#9aa3b2; font-size:13px; padding:48px 8px; text-align:center;
+          background:#0b0d12; border:1px dashed #2a3140; border-radius:6px; max-width:960px; }
+  .cap { font-size:12px; color:#8a93a3; margin:8px 0; }
+
+  .row { margin:8px 0; }
+  label { color:#9aa3b2; margin-right:6px; }
+  input[type=number] { width:88px; background:#0b0d12; color:#dfe3ea; border:1px solid #2a3140; border-radius:4px; padding:5px 7px; }
+  input[type=file]   { color:#9aa3b2; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:5px; padding:7px 13px; cursor:pointer; margin:2px 2px 2px 0; font-size:13px; }
+  button.alt  { background:#374151; } button.warn { background:#7f1d1d; }
+  button:active { transform:translateY(1px); }
+  a.dl { text-decoration:none; }
+  .ccm { display:grid; grid-template-columns:repeat(3,80px); gap:5px; margin:6px 0; }
+  #log { background:#070a0f; border:1px solid #232936; border-radius:6px; padding:10px; height:62vh; overflow:auto;
+         white-space:pre-wrap; word-break:break-word; font:11.5px/1.4 ui-monospace,Consolas,monospace; color:#b8c0cc; }
+  .hint { font-size:12px; color:#8a93a3; margin-top:8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>MOVE-IIIa Imager — Ground Station</h1>
+  <h1>MOVE-IIIa Imager</h1>
   <div id="status">
-    connecting…
+    connecting...
     <span>cam<span id="d_stream" class="dot"></span></span>
     <span>thermal<span id="d_thermal" class="dot"></span></span>
   </div>
+  <button class="alt" onclick="cmd('save=1')">Save to NVS</button>
+  <button class="warn" onclick="if(confirm('Reboot the board?'))cmd('reboot=1')">Reboot</button>
 </header>
 
-<main>
-  <section class="card" id="preview">
-    <h2>Live preview</h2>
-    <img id="prev" alt="preview">
-    <div id="prevmsg">preview offline (enable in P3)</div>
-    <div id="prevcap" style="font-size:12px;color:#9aa3b2;margin-top:6px;"></div>
-  </section>
+<!-- live telemetry dashboard, visible on every tab -->
+<div class="tlm">
+  <span class="chip"><b>IP</b><span id="t_ip">-</span></span>
+  <span class="chip"><b>RSSI</b><span id="t_rssi">-</span></span>
+  <span class="chip"><b>up</b><span id="t_up">-</span></span>
+  <span class="chip"><b>frame</b><span id="t_seq">-</span></span>
+  <span class="chip"><b>mean</b><span id="t_mean">-</span></span>
+  <span class="chip"><b>min/max</b><span id="t_minmax">-</span></span>
+  <span class="chip"><b>clip</b><span id="t_sat">-</span></span>
+  <span class="chip"><b>exp</b><span id="t_exp">-</span></span>
+  <span class="chip"><b>gain</b><span id="t_gain">-</span></span>
+  <span class="chip"><b>WB r/b</b><span id="t_wb">-</span></span>
+  <span class="chip"><b>BL</b><span id="t_bl">-</span></span>
+  <span class="chip"><b>focus</b><span id="t_focus">-</span></span>
+  <span class="chip"><b>cap</b><span id="t_cap">-</span></span>
+  <span class="chip"><b>heap</b><span id="t_heap">-</span></span>
+  <span class="chip"><b>PSRAM</b><span id="t_psram">-</span></span>
+  <span class="chip"><b>reset</b><span id="t_reset">-</span></span>
+</div>
 
-  <section class="card">
-    <h2>Telemetry</h2>
-    <div class="grid">
-      <span>frame</span><span id="t_seq">–</span>
-      <span>mean</span><span id="t_mean">–</span>
-      <span>min / max</span><span id="t_minmax">–</span>
-      <span>clipping</span><span id="t_sat">–</span>
-      <span>exposure</span><span id="t_exp">–</span>
-      <span>gain</span><span id="t_gain">–</span>
-      <span>black level</span><span id="t_bl">–</span>
-      <span>WB R / B</span><span id="t_wb">–</span>
-      <span>cap / isp / usb</span><span id="t_time">–</span>
-      <span>uptime</span><span id="t_up">–</span>
-      <span>free heap</span><span id="t_heap">–</span>
-      <span>free PSRAM</span><span id="t_psram">–</span>
-      <span>last reset</span><span id="t_reset">–</span>
-      <span>focus</span><span id="t_focus">–</span>
-    </div>
-  </section>
+<nav class="tabs">
+  <button class="tabbtn active" data-tab="rgb"      onclick="showTab('rgb')">RGB camera</button>
+  <button class="tabbtn"        data-tab="lwir"     onclick="showTab('lwir')">LWIR camera</button>
+  <button class="tabbtn"        data-tab="tuning"   onclick="showTab('tuning')">Image tuning</button>
+  <button class="tabbtn"        data-tab="exposure" onclick="showTab('exposure')">Auto exposure</button>
+  <button class="tabbtn"        data-tab="ota"      onclick="showTab('ota')">OTA update</button>
+  <button class="tabbtn"        data-tab="console"  onclick="showTab('console')">Console</button>
+</nav>
 
-  <section class="card">
-    <h2>Auto-exposure</h2>
-    <div class="row"><label>target mean</label><input type="number" id="ae_target" min="2" max="250" value="90">
-      <button onclick="cmd('ae_target='+v('ae_target'))">Set</button></div>
-    <div class="row"><label><input type="checkbox" id="ae_en" checked onchange="cmd('ae_en='+(this.checked?1:0))"> AE enabled</label></div>
-    <h2 style="margin-top:14px;">Manual</h2>
-    <div class="row"><label>exp (lines)</label><input type="number" id="m_exp" min="2" max="2246" value="676"></div>
-    <div class="row"><label>gain x1024</label><input type="number" id="m_gain" min="1024" max="406320" value="1024">
-      <button onclick="cmd('ae_en=0&exp='+v('m_exp')+'&gain='+v('m_gain'))">Apply (AE off)</button></div>
-    <h2 style="margin-top:14px;">Actions</h2>
-    <a href="/capture.jpg" download><button class="alt">HD capture (1280×720 JPEG)</button></a>
-    <button class="alt" onclick="cmd('sstv=1')">SSTV TX</button>
-    <button class="alt" onclick="cmd('save=1')">Save settings</button>
-    <button class="alt" onclick="if(confirm('Reboot the board?'))cmd('reboot=1')">Reboot</button>
-  </section>
+<!-- RGB camera -->
+<section class="panel show" id="tab-rgb">
+  <h2>RGB preview (visible, software ISP)</h2>
+  <img id="rgbimg" class="preview" alt="RGB preview">
+  <div class="pmsg" id="rgbmsg">starting preview...</div>
+  <div class="cap">Live ~1 fps (the 4K software-ISP downscale is ~0.66 s/frame). Polled on demand.</div>
+  <h2 class="sub">Download full-res still</h2>
+  <a class="dl" href="/capture.jpg?res=hd"  download><button class="alt">HD 1280x720</button></a>
+  <a class="dl" href="/capture.jpg?res=fhd" download><button>FHD 1920x1080</button></a>
+  <button class="alt" onclick="cmd('sstv=1')">Transmit SSTV (Robot36)</button>
+  <div class="hint">FHD is the full-res ceiling on this build: native 4K RGB565 (16.6 MB) will not fit alongside the capture buffer in free PSRAM.</div>
+</section>
 
-  <section class="card">
-    <h2>Image tuning</h2>
-    <div class="row"><label><input type="checkbox" id="awb" checked onchange="cmd('awb='+(this.checked?1:0))"> auto white balance (gray-world)</label></div>
-    <div class="row"><label>WB R</label><input type="number" step="0.01" id="wbr" value="1.60">
-      <label>B</label><input type="number" step="0.01" id="wbb" value="3.00">
-      <button onclick="cmd('awb=0&wb_r='+v('wbr')+'&wb_b='+v('wbb'))">Set WB (AWB off)</button></div>
-    <div class="row"><label>black level</label><input type="number" id="bl" value="16">
-      <button onclick="cmd('bl='+v('bl'))">Set</button></div>
-    <div class="row"><label>CCM (3×3, row-major) — sensor RGB → sRGB</label></div>
-    <div style="display:grid;grid-template-columns:repeat(3,76px);gap:4px;margin:4px 0;">
-      <input type="number" step="0.01" id="c0" value="1.40"><input type="number" step="0.01" id="c1" value="-0.28"><input type="number" step="0.01" id="c2" value="-0.12">
-      <input type="number" step="0.01" id="c3" value="-0.22"><input type="number" step="0.01" id="c4" value="1.42"><input type="number" step="0.01" id="c5" value="-0.20">
-      <input type="number" step="0.01" id="c6" value="-0.05"><input type="number" step="0.01" id="c7" value="-0.35"><input type="number" step="0.01" id="c8" value="1.40">
-    </div>
-    <button onclick="cmd('ccm0='+v('c0')+'&ccm1='+v('c1')+'&ccm2='+v('c2')+'&ccm3='+v('c3')+'&ccm4='+v('c4')+'&ccm5='+v('c5')+'&ccm6='+v('c6')+'&ccm7='+v('c7')+'&ccm8='+v('c8'))">Apply CCM</button>
-  </section>
+<!-- LWIR camera -->
+<section class="panel" id="tab-lwir">
+  <h2>LWIR preview (thermal, MI1602)</h2>
+  <img id="lwirimg" class="preview" alt="LWIR preview">
+  <div class="pmsg" id="lwirmsg">loading thermal...</div>
+  <div class="hint">Live raw output from the MI1602 FPA (160x120, twilight colormap, nearest-neighbour upscaled). The MI48 ASIC is not yet producing a calibrated frame (task #27), so until thermal bring-up is finished expect uncalibrated noise rather than a real scene - the I2C + SPI readout path itself is confirmed working. If the camera is absent the endpoint returns 503 and this shows "thermal offline".</div>
+</section>
 
-  <section class="card">
-    <h2>Firmware update (OTA)</h2>
-    <div class="row"><input type="file" id="fw" accept=".bin"> <button onclick="ota()">Upload &amp; reboot</button></div>
-    <div id="otamsg" style="font-size:12px;color:#9aa3b2;"></div>
-  </section>
+<!-- Image tuning -->
+<section class="panel" id="tab-tuning">
+  <h2>White balance</h2>
+  <div class="row"><label><input type="checkbox" id="awb" checked onchange="cmd('awb='+(this.checked?1:0))"> auto white balance (gray-world)</label></div>
+  <div class="row"><label>WB R</label><input type="number" step="0.01" id="wbr" value="1.60">
+    <label>B</label><input type="number" step="0.01" id="wbb" value="3.00">
+    <button onclick="cmd('awb=0&wb_r='+v('wbr')+'&wb_b='+v('wbb'))">Set WB (AWB off)</button></div>
+  <h2 class="sub">Black level</h2>
+  <div class="row"><label>offset</label><input type="number" id="bl" value="16">
+    <button onclick="cmd('bl='+v('bl'))">Set</button></div>
+  <h2 class="sub">Colour-correction matrix (3x3, row-major) - sensor RGB to sRGB</h2>
+  <div class="ccm">
+    <input type="number" step="0.01" id="c0" value="1.40"><input type="number" step="0.01" id="c1" value="-0.28"><input type="number" step="0.01" id="c2" value="-0.12">
+    <input type="number" step="0.01" id="c3" value="-0.22"><input type="number" step="0.01" id="c4" value="1.42"><input type="number" step="0.01" id="c5" value="-0.20">
+    <input type="number" step="0.01" id="c6" value="-0.05"><input type="number" step="0.01" id="c7" value="-0.35"><input type="number" step="0.01" id="c8" value="1.40">
+  </div>
+  <button onclick="cmd('ccm0='+v('c0')+'&ccm1='+v('c1')+'&ccm2='+v('c2')+'&ccm3='+v('c3')+'&ccm4='+v('c4')+'&ccm5='+v('c5')+'&ccm6='+v('c6')+'&ccm7='+v('c7')+'&ccm8='+v('c8'))">Apply CCM</button>
+  <div class="hint">Open the RGB camera tab in another look to watch the effect; values persist with Save to NVS.</div>
+</section>
 
-  <section class="card" style="flex:1 1 100%;">
-    <h2>Device log <button class="alt" style="font-size:11px;padding:2px 8px;" onclick="getlog()">refresh</button></h2>
-    <div id="log">—</div>
-  </section>
-</main>
+<!-- Auto exposure -->
+<section class="panel" id="tab-exposure">
+  <h2>Auto exposure</h2>
+  <div class="row"><label>target mean</label><input type="number" id="ae_target" min="2" max="250" value="90">
+    <button onclick="cmd('ae_target='+v('ae_target'))">Set</button></div>
+  <div class="row"><label><input type="checkbox" id="ae_en" checked onchange="cmd('ae_en='+(this.checked?1:0))"> AE enabled (closed loop)</label></div>
+  <h2 class="sub">Manual override</h2>
+  <div class="row"><label>exposure (lines)</label><input type="number" id="m_exp" min="2" max="2246" value="676"></div>
+  <div class="row"><label>gain (x1024)</label><input type="number" id="m_gain" min="1024" max="406320" value="1024">
+    <button onclick="cmd('ae_en=0&exp='+v('m_exp')+'&gain='+v('m_gain'))">Apply (AE off)</button></div>
+  <div class="hint">Watch "mean" and "clip" in the telemetry bar above to converge by eye.</div>
+</section>
+
+<!-- OTA update -->
+<section class="panel" id="tab-ota">
+  <h2>Firmware update over WiFi</h2>
+  <div class="row"><input type="file" id="fw" accept=".bin"> <button onclick="ota()">Upload &amp; reboot</button></div>
+  <div id="otamsg" class="hint"></div>
+  <div class="hint">Pick <code>build/cubesat_imager.bin</code> from a ground build. It is written to the inactive OTA slot and the board reboots into it; if the new image crashes during a ~5 s burn-in the bootloader auto-rolls back to the previous slot.</div>
+</section>
+
+<!-- Console -->
+<section class="panel" id="tab-console">
+  <h2>Device log
+    <button class="alt" style="font-size:11px;padding:3px 9px;" onclick="pollLogOnce()">refresh</button>
+    <button class="alt" style="font-size:11px;padding:3px 9px;" onclick="$('log').textContent='';">clear view</button>
+  </h2>
+  <div id="log">(opening this tab starts a live tail of the last ~4 KB of device log)</div>
+  <div class="hint">Auto-refreshing every 1.5 s while this tab is open. Auto-scrolls when you are at the bottom.</div>
+</section>
 
 <script>
 const $ = id => document.getElementById(id);
-const RST = {1:'power-on',2:'ext',3:'sw',4:'PANIC',5:'int-wdt',6:'task-wdt',7:'wdt',8:'deepsleep',9:'BROWNOUT',11:'usb'};
 const v = id => $(id).value;
+const RST = {1:'power-on',2:'ext',3:'sw',4:'PANIC',5:'int-wdt',6:'task-wdt',7:'wdt',8:'deepsleep',9:'BROWNOUT',11:'usb',16:'pwrglitch'};
 function fmtUp(s){ s=+s; const h=s/3600|0,m=s/60%60|0; return (h?h+'h ':'')+m+'m '+(s%60|0)+'s'; }
+
+let activeTab = 'rgb';
+let gen = 0;            // bumps on every tab switch so stale poll chains stop
+let firstTlm = true;    // seed editable fields from telemetry once
 
 async function cmd(qs){
   try { await fetch('/api/cmd?'+qs, {method:'POST'}); } catch(e){}
@@ -124,56 +182,94 @@ async function cmd(qs){
 async function poll(){
   try {
     const t = await (await fetch('/api/tlm')).json();
-    $('status').firstChild.textContent =
-      'IP '+t.ip+'   RSSI '+t.rssi+' dBm   ';
-    $('d_stream').className  = 'dot ' + (t.stream ? 'on':'bad');
-    $('d_thermal').className = 'dot ' + (t.thermal? 'on':'bad');
-    $('t_seq').textContent = t.seq;
-    $('t_mean').textContent = t.mean;
-    $('t_minmax').textContent = t.min+' / '+t.max;
-    $('t_sat').textContent = (t.sat_ppm/10000).toFixed(2)+' %';
-    $('t_exp').textContent = t.exp+' lines';
-    $('t_gain').textContent = (t.gain/1024).toFixed(2)+'x';
-    $('t_bl').textContent = t.bl;
-    $('t_wb').textContent = t.wbr.toFixed(2)+' / '+t.wbb.toFixed(2);
-    $('t_time').textContent = (t.cap_us/1000|0)+' / '+(t.isp_us/1000|0)+' / '+(t.usb_us/1000|0)+' ms';
-    $('t_up').textContent = fmtUp(t.up);
-    $('t_heap').textContent = (t.heap/1024|0)+' KB (min '+(t.heap_min/1024|0)+')';
-    $('t_psram').textContent = (t.psram/1024/1024).toFixed(2)+' MB';
-    $('t_reset').textContent = RST[t.reset] || ('#'+t.reset);
+    $('status').firstChild.textContent = (t.ok ? 'online' : 'no camera frame') + '  ';
+    $('d_stream').className  = 'dot ' + (t.stream  ? 'on':'bad');
+    $('d_thermal').className = 'dot ' + (t.thermal ? 'on':'bad');
+    $('t_ip').textContent    = t.ip;
+    $('t_rssi').textContent  = t.rssi + ' dBm';
+    $('t_up').textContent    = fmtUp(t.up);
+    $('t_seq').textContent   = t.seq;
+    $('t_mean').textContent  = t.mean;
+    $('t_minmax').textContent= t.min + '/' + t.max;
+    $('t_sat').textContent   = (t.sat_ppm/10000).toFixed(2) + '%';
+    $('t_exp').textContent   = t.exp + ' ln';
+    $('t_gain').textContent  = (t.gain/1024).toFixed(2) + 'x';
+    $('t_wb').textContent    = t.wbr.toFixed(2) + '/' + t.wbb.toFixed(2);
+    $('t_bl').textContent    = t.bl;
     $('t_focus').textContent = t.focus;
+    $('t_cap').textContent   = (t.cap_us/1000|0) + ' ms';
+    $('t_heap').textContent  = (t.heap/1024|0) + ' KB';
+    $('t_psram').textContent = (t.psram/1024/1024).toFixed(1) + ' MB';
+    $('t_reset').textContent = RST[t.reset] || ('#'+t.reset);
     if ($('awb')) $('awb').checked = !!t.awb;
-    if (!$('ae_target').matches(':focus')) $('ae_target').value = t.ae_target;
     $('ae_en').checked = !!t.ae_en;
-  } catch(e){ $('status').firstChild.textContent = 'disconnected — retrying… '; }
+    if (!$('ae_target').matches(':focus')) $('ae_target').value = t.ae_target;
+    if (firstTlm) {   // seed the manual/tuning fields with the live values once
+      firstTlm = false;
+      $('wbr').value = t.wbr.toFixed(2); $('wbb').value = t.wbb.toFixed(2);
+      $('bl').value = t.bl; $('m_exp').value = t.exp; $('m_gain').value = t.gain;
+    }
+  } catch(e){ $('status').firstChild.textContent = 'disconnected - retrying...  '; }
 }
 
-// Live preview (MJPEG, P3). Until the endpoint exists the <img> errors; retry slowly.
-function armPreview(){
-  const img = $('prev');
-  img.onload  = () => { $('prevmsg').style.display='none'; img.style.display='block'; };
-  img.onerror = () => { img.style.display='none'; $('prevmsg').style.display='block';
-                        setTimeout(armPreview, 4000); };
-  img.style.display='none';
-  img.src = '/stream?t=' + Date.now();
+// Per-view preview: probe-load the next frame, swap in on success, chain.
+// Self-terminates when the tab changes (gen mismatch) so only one chain runs.
+function loadPreview(view, g){
+  if (activeTab !== view || g !== gen) return;
+  const img = $(view+'img'), msg = $(view+'msg');
+  const probe = new Image();
+  probe.onload = () => {
+    if (activeTab !== view || g !== gen) return;
+    img.src = probe.src; img.style.display = 'block'; msg.style.display = 'none';
+    setTimeout(() => loadPreview(view, g), 120);   // small gap -> /api/tlm gets a worker slot
+  };
+  probe.onerror = () => {
+    if (activeTab !== view || g !== gen) return;
+    img.style.display = 'none';
+    msg.style.display = 'block';
+    msg.textContent = (view === 'lwir') ? 'thermal offline' : 'waiting for first frame...';
+    setTimeout(() => loadPreview(view, g), 1500);   // offline (esp. LWIR) -> retry slowly
+  };
+  probe.src = '/snapshot.jpg?view=' + view + '&t=' + Date.now();
 }
 
-async function getlog(){
-  try { $('log').textContent = await (await fetch('/api/log')).text(); }
-  catch(e){ $('log').textContent = '(log endpoint not available yet)'; }
+async function pollLog(g){
+  if (activeTab !== 'console' || g !== gen) return;
+  await pollLogOnce();
+  setTimeout(() => pollLog(g), 1500);
+}
+async function pollLogOnce(){
+  try {
+    const txt = await (await fetch('/api/log')).text();
+    const el = $('log');
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+    el.textContent = txt || '(log empty)';
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  } catch(e){ /* a snapshot render may briefly hold the worker; just retry */ }
+}
+
+function showTab(name){
+  activeTab = name; gen++;
+  const g = gen;
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('show', p.id === 'tab-'+name));
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  if (name === 'rgb')     loadPreview('rgb', g);
+  if (name === 'lwir')    loadPreview('lwir', g);
+  if (name === 'console') pollLog(g);
 }
 
 async function ota(){
   const f = $('fw').files[0];
-  if (!f){ $('otamsg').textContent='pick a .bin first'; return; }
-  $('otamsg').textContent = 'uploading '+(f.size/1024|0)+' KB…';
+  if (!f){ $('otamsg').textContent = 'pick a .bin first'; return; }
+  $('otamsg').textContent = 'uploading ' + (f.size/1024|0) + ' KB...';
   try {
     const r = await fetch('/api/ota', {method:'POST', body:f});
-    $('otamsg').textContent = r.ok ? 'OK — rebooting into new image…' : 'failed: '+await r.text();
-  } catch(e){ $('otamsg').textContent = 'upload error: '+e; }
+    $('otamsg').textContent = r.ok ? 'OK - rebooting into the new image...' : 'failed: ' + await r.text();
+  } catch(e){ $('otamsg').textContent = 'upload error: ' + e; }
 }
 
-poll(); setInterval(poll, 1000); armPreview();
+poll(); setInterval(poll, 1000);
+showTab('rgb');   // kick off the RGB preview chain
 </script>
 </body>
 </html>

@@ -160,6 +160,17 @@ static float qparamf(httpd_req_t *req, const char *key, float def)
     return def;
 }
 
+/* True if string query param `key` exactly equals `want`. Used for the
+ * ?view=rgb|lwir and ?res=hd|fhd selectors on the image endpoints. */
+static bool qparam_is(httpd_req_t *req, const char *key, const char *want)
+{
+    char q[320], val[24];
+    if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+        httpd_query_key_value(q, key, val, sizeof val) == ESP_OK)
+        return strcmp(val, want) == 0;
+    return false;
+}
+
 /* Forward decl: the reboot task is defined in the OTA section below. */
 static void ota_reboot_task(void *a);
 
@@ -202,12 +213,15 @@ static size_t                s_jin_cap;
 static uint8_t              *s_jout;    /* JPEG output   (DMA-capable) */
 static size_t                s_jout_cap;
 
-/* Sized for the HD still (1280x720 RGB565); the 640x240 preview reuses the same
+/* Sized for the largest single render we serve: the full-res FHD still
+ * (1920x1080 RGB565 = ~4 MB); every smaller preview/HD render reuses the same
  * buffers. Allocated once in jpeg_init() — NO per-request alloc (allocating the
  * DMA-capable encoder memory per /capture.jpg request hung the 2nd request:
- * the pool didn't free cleanly and the next alloc blocked). */
-#define JPEG_IN_MAX   (1280 * 720 * 2)
-#define JPEG_OUT_MAX  (384 * 1024)
+ * the pool didn't free cleanly and the next alloc blocked). FHD is the
+ * practical full-res ceiling: native 4K RGB565 input is 16.6 MB and would not
+ * fit alongside the 16.6 MB capture buffer in the ~14 MB of free PSRAM. */
+#define JPEG_IN_MAX   (1920 * 1080 * 2)
+#define JPEG_OUT_MAX  (512 * 1024)
 
 static esp_err_t jpeg_init(void)
 {
@@ -225,28 +239,51 @@ static esp_err_t jpeg_init(void)
     return ESP_OK;
 }
 
-/* Copy + encode the latest preview into s_jout. Call with s_jpeg_mtx held. */
-static esp_err_t encode_locked(uint32_t *out_len)
+/* Render one view straight from the latest camera frame into s_jin at w x h,
+ * then hardware-JPEG-encode into s_jout. Call with s_jpeg_mtx held.
+ *   lwir=false -> RGB via the software ISP (ground_render_hd)
+ *   lwir=true  -> thermal via the MI1602 (ground_render_lwir)
+ * Returns ESP_ERR_INVALID_STATE when the source is not ready (no frame yet, or
+ * the thermal camera is offline) so the handler can answer 503. Rendering here
+ * (in the httpd worker, on demand) is what lets us drop the old persistent
+ * MJPEG /stream: each request renders + sends + returns, so the single worker
+ * is free between frames and /api/tlm + /api/log stay responsive while a
+ * preview tab polls snapshots. */
+static esp_err_t render_view_jpeg(bool lwir, int w, int h, int quality, uint32_t *out_len)
 {
-    uint16_t w = 0, h = 0;
-    size_t n = ground_preview_copy(s_jin, s_jin_cap, &w, &h);
-    if (!n || !w || !h) return ESP_ERR_INVALID_STATE;   /* no frame yet */
+    if ((size_t)w * h * 2 > s_jin_cap) return ESP_ERR_INVALID_SIZE;
+    bool ok = lwir ? ground_render_lwir(s_jin, w, h)
+                   : ground_render_hd(s_jin, w, h);
+    if (!ok) return ESP_ERR_INVALID_STATE;
     jpeg_encode_cfg_t cfg = {
         .width = w, .height = h,
         .src_type      = JPEG_ENCODE_IN_FORMAT_RGB565,
         .sub_sample    = JPEG_DOWN_SAMPLING_YUV420,
-        .image_quality = 80,
+        .image_quality = quality,
         .pixel_reverse = false,   /* flip if colours come out wrong */
     };
-    return jpeg_encoder_process(s_jpeg, &cfg, s_jin, n, s_jout, s_jout_cap, out_len);
+    return jpeg_encoder_process(s_jpeg, &cfg, s_jin, (size_t)w * h * 2,
+                                s_jout, s_jout_cap, out_len);
 }
 
+/* GET /snapshot.jpg?view=rgb|lwir&w=&h=  — one on-demand JPEG of the requested
+ * view. The preview tabs poll this (chained on the <img> onload), so it must
+ * stay a short request: render, send, return. Defaults: RGB 960x540 (hi-res
+ * preview), LWIR 480x360. */
 static esp_err_t snapshot_get(httpd_req_t *req)
 {
     if (!s_jpeg) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no encoder"); return ESP_FAIL; }
+    bool lwir = qparam_is(req, "view", "lwir");
+    int w = qparam(req, "w", lwir ? 480 : 960);
+    int h = qparam(req, "h", lwir ? 360 : 540);
+    if (w < 64)   w = 64;
+    if (w > 1920) w = 1920;
+    if (h < 64)   h = 64;
+    if (h > 1080) h = 1080;
+
     xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
     uint32_t len = 0;
-    esp_err_t er = encode_locked(&len), sr = ESP_OK;
+    esp_err_t er = render_view_jpeg(lwir, w, h, 80, &len), sr = ESP_OK;
     if (er == ESP_OK) {
         httpd_resp_set_type(req, "image/jpeg");
         httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -256,69 +293,43 @@ static esp_err_t snapshot_get(httpd_req_t *req)
     if (er != ESP_OK) {
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "no frame yet");
+        httpd_resp_sendstr(req, lwir ? "thermal offline" : "no frame yet");
         return ESP_OK;
     }
     return sr;
 }
 
-#define MJPEG_BOUNDARY "fr"
-static esp_err_t stream_get(httpd_req_t *req)
-{
-    if (!s_jpeg) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no encoder"); return ESP_FAIL; }
-    httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=" MJPEG_BOUNDARY);
-    s_stream_clients++;        /* tell the camera task to render previews */
-    char hdr[96];
-    while (1) {
-        xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
-        uint32_t len = 0;
-        esp_err_t er = encode_locked(&len), sr = ESP_OK;
-        if (er == ESP_OK) {
-            int hn = snprintf(hdr, sizeof hdr,
-                "\r\n--" MJPEG_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
-                (unsigned)len);
-            sr = httpd_resp_send_chunk(req, hdr, hn);
-            if (sr == ESP_OK) sr = httpd_resp_send_chunk(req, (const char *)s_jout, len);
-        }
-        xSemaphoreGive(s_jpeg_mtx);
-        if (er != ESP_OK) { vTaskDelay(pdMS_TO_TICKS(200)); continue; }  /* wait for first frame */
-        if (sr != ESP_OK) break;                                        /* client gone */
-        vTaskDelay(pdMS_TO_TICKS(300));   /* ~3 fps cap; the source is ~1 fps anyway */
-    }
-    if (s_stream_clients > 0) s_stream_clients--;
-    httpd_resp_send_chunk(req, NULL, 0);  /* terminate */
-    return ESP_OK;
-}
+/* (Legacy MJPEG /stream removed — the preview is now poll-based /snapshot.jpg.
+ * A persistent MJPEG response looped forever inside esp_http_server's single
+ * worker task, so a connected viewer starved /api/tlm and /api/log: that was
+ * the "console shows nothing" bug. Per-request snapshots free the worker
+ * between frames.) */
 
-/* ---- HD still capture, served at /capture.jpg (P4) --------------------- */
+/* ---- full-res still capture, served at /capture.jpg?res=hd|fhd (P4) ---- */
+/* hd = 1280x720, fhd = 1920x1080 (the practical full-res ceiling — see
+ * JPEG_IN_MAX). Renders RGB into the shared buffers under s_jpeg_mtx, held
+ * across the send so a concurrent preview snapshot can't clobber s_jout
+ * mid-transfer; a one-shot full-res download briefly pausing the preview is
+ * fine. Quality 88 (vs the preview's 80) since this is a keep-it download. */
 static esp_err_t capture_get(httpd_req_t *req)
 {
     if (!s_jpeg) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no encoder"); return ESP_FAIL; }
-    const int w = 1280, h = 720;             /* HD still downscaled from the 4K frame */
-    uint32_t outlen = 0;
-    bool ok = false;
-    /* Reuse the shared encoder buffers (sized for HD) under s_jpeg_mtx — no
-     * per-request allocation. Held across the send so the preview path can't
-     * clobber s_jout mid-transfer; a one-shot HD download briefly pausing the
-     * live stream is fine. */
+    bool fhd = qparam_is(req, "res", "fhd");
+    const int w = fhd ? 1920 : 1280, h = fhd ? 1080 : 720;
+
     xSemaphoreTake(s_jpeg_mtx, portMAX_DELAY);
-    if (ground_render_hd(s_jin, w, h)) {     /* 4K -> HD RGB565 into the shared input buf */
-        jpeg_encode_cfg_t cfg = { .width = w, .height = h,
-            .src_type = JPEG_ENCODE_IN_FORMAT_RGB565, .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
-            .image_quality = 88, .pixel_reverse = false };
-        ok = (jpeg_encoder_process(s_jpeg, &cfg, s_jin, (size_t)w * h * 2,
-                                   s_jout, s_jout_cap, &outlen) == ESP_OK);
-    }
-    esp_err_t ret;
-    if (ok) {
+    uint32_t outlen = 0;
+    esp_err_t er = render_view_jpeg(false, w, h, 88, &outlen), ret = ESP_OK;
+    if (er == ESP_OK) {
         httpd_resp_set_type(req, "image/jpeg");
-        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"sc850sl_hd.jpg\"");
+        httpd_resp_set_hdr(req, "Content-Disposition",
+                           fhd ? "attachment; filename=\"sc850sl_fhd.jpg\""
+                               : "attachment; filename=\"sc850sl_hd.jpg\"");
         ret = httpd_resp_send(req, (const char *)s_jout, outlen);
     } else {
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "HD capture unavailable (no frame yet)");
-        ret = ESP_OK;
+        httpd_resp_sendstr(req, "capture unavailable (no frame yet)");
     }
     xSemaphoreGive(s_jpeg_mtx);
     return ret;
@@ -437,7 +448,6 @@ esp_err_t ground_http_start(void)
     httpd_uri_t u_tlm  = { .uri = "/api/tlm", .method = HTTP_GET,  .handler = tlm_get  };
     httpd_uri_t u_cmd  = { .uri = "/api/cmd", .method = HTTP_POST, .handler = cmd_post };
     httpd_uri_t u_snap = { .uri = "/snapshot.jpg", .method = HTTP_GET,  .handler = snapshot_get };
-    httpd_uri_t u_strm = { .uri = "/stream",       .method = HTTP_GET,  .handler = stream_get };
     httpd_uri_t u_ota  = { .uri = "/api/ota",      .method = HTTP_POST, .handler = ota_post };
     httpd_uri_t u_log  = { .uri = "/api/log",      .method = HTTP_GET,  .handler = log_get  };
     httpd_uri_t u_cap  = { .uri = "/capture.jpg",  .method = HTTP_GET,  .handler = capture_get };
@@ -445,7 +455,6 @@ esp_err_t ground_http_start(void)
     httpd_register_uri_handler(s_server, &u_tlm);
     httpd_register_uri_handler(s_server, &u_cmd);
     httpd_register_uri_handler(s_server, &u_snap);
-    httpd_register_uri_handler(s_server, &u_strm);
     httpd_register_uri_handler(s_server, &u_ota);
     httpd_register_uri_handler(s_server, &u_log);
     httpd_register_uri_handler(s_server, &u_cap);

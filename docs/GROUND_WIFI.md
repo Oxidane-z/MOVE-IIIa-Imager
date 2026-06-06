@@ -4,12 +4,17 @@ Ground-only convenience layer: WiFi + a browser control page + OTA, so the
 flight board can be driven and updated **without a USB cable**. Everything is
 gated behind `CONFIG_GROUND_WIFI_ENABLE` — the flight build pulls none of it.
 
-> Status (2026-06-06): **fully hardware-verified.** Boot, WiFi + mDNS, camera
-> stream, telemetry/health, `/stream` (MJPEG), `/capture.jpg` (HD), `/api/log`,
-> control, and a full OTA round-trip all confirmed at `move-imager.local`. Two
-> HW-only bugs were fixed during bring-up: an esp_hosted SDIO mempool OOM
-> reboot-loop (`CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`) and a `/capture.jpg`
-> per-request-alloc hang (reuse persistent JPEG buffers).
+> Status (2026-06-06): **fully hardware-verified.** Tabbed web UI (RGB / LWIR /
+> tuning / exposure / OTA / console), poll-based per-view preview, full-res
+> HD+FHD download, an auto-tailing console, telemetry/health, control, and a
+> full OTA round-trip all confirmed at `move-imager.local`. The earlier MJPEG
+> `/stream` was **removed**: it looped forever inside esp_http_server's single
+> worker, so an open preview starved `/api/tlm` + `/api/log` (the "blank
+> console" bug). Previews are now poll-based `/snapshot.jpg`. Three HW-only bugs
+> were fixed during bring-up: an esp_hosted SDIO mempool OOM reboot-loop
+> (`CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`), a `/capture.jpg`
+> per-request-alloc hang (reuse persistent JPEG buffers), and the single-worker
+> stream wedge above.
 
 ## Hardware
 
@@ -61,16 +66,15 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 
 ## Web UI / endpoints
 
-| Endpoint        | Method | Purpose                                            |
-|-----------------|--------|----------------------------------------------------|
-| `/`             | GET    | control page (embedded `ground_index.html`)        |
-| `/api/tlm`      | GET    | telemetry JSON (exp/gain/mean/sat/wb/timings/ip…)  |
-| `/api/cmd`      | POST   | control — query params below                       |
-| `/snapshot.jpg` | GET    | one hardware-JPEG frame of the 640×240 composite   |
-| `/stream`       | GET    | MJPEG live preview (RGB \| thermal)                |
-| `/capture.jpg`  | GET    | HD still — 1280×720 JPEG download                  |
-| `/api/ota`      | POST   | firmware update — raw `.bin` as the body           |
-| `/api/log`      | GET    | recent device log (last ~4 KB)                     |
+| Endpoint                       | Method | Purpose                                                       |
+|--------------------------------|--------|---------------------------------------------------------------|
+| `/`                            | GET    | tabbed control page (embedded `ground_index.html`)            |
+| `/api/tlm`                     | GET    | telemetry JSON (exp/gain/mean/sat/wb/timings/heap/ip…)        |
+| `/api/cmd`                     | POST   | control — query params below                                  |
+| `/snapshot.jpg?view=rgb\|lwir` | GET    | one on-demand JPEG of a view (default RGB 960×540, LWIR 480×360); the preview tabs poll this |
+| `/capture.jpg?res=hd\|fhd`     | GET    | full-res still download — `hd` 1280×720, `fhd` 1920×1080      |
+| `/api/ota`                     | POST   | firmware update — raw `.bin` as the body                      |
+| `/api/log`                     | GET    | recent device log (last ~4 KB; the console tab auto-tails it) |
 
 `/api/cmd` params (omit any to leave unchanged):
 - exposure/AE: `ae_target=<mean>`, `ae_en=0|1`, `exp=<lines>`, `gain=<x1024>`
@@ -90,25 +94,56 @@ layout changed, `cmd //c _erase_flash.bat` once before flashing.
 
 ## Compute / preview behaviour
 
-- The software ISP (the ~0.6 s 4K→RGB box-filter downscale) runs **on demand**:
-  only when a `/stream` viewer is connected *or* the USB push is on. An idle
-  board (no viewer) just does capture + raw stats + AE + telemetry — cheap.
-- The legacy USB binary preview push (host `tools/usb_preview.py`) defaults
-  **off** on the WiFi build; the web `/stream` replaces it and it frees the USB
-  console + ~0.36 s/frame of I/O. Re-enable at runtime with `/api/cmd?usb=1`.
+- Previews are **poll-based**, not a persistent stream. Each `/snapshot.jpg`
+  renders one view on demand (the ~0.66 s 4K→RGB box-filter downscale, or an
+  MI1602 thermal grab), JPEG-encodes, sends, and returns — so the single
+  esp_http_server worker is free between frames and `/api/tlm` + `/api/log` stay
+  responsive while a preview tab polls. The browser chains the next poll on the
+  `<img>` onload, self-pacing to the render rate (~1 fps). Verified: under a
+  continuous snapshot flood, telemetry + log still answer in ≤2.5 s, never hang.
+- Only the **active tab's** heavy poller runs (RGB *or* LWIR snapshot, *or* the
+  console log — never all at once), so an idle board (no preview tab open) just
+  does capture + raw stats + AE + telemetry, cheap.
+- Render now happens in the httpd worker, not the camera task, so the camera
+  task's `isp_us` reads ~0 in telemetry (expected). The legacy USB binary push
+  (`tools/usb_preview.py`) still defaults **off**; re-enable with `/api/cmd?usb=1`.
+- `/capture.jpg?res=fhd` (1920×1080) is the full-res ceiling: native 4K RGB565
+  input is 16.6 MB and won't fit beside the 16.6 MB capture buffer in free PSRAM.
+
+## Web UI (tabs)
+
+Six tabs over a persistent telemetry dashboard + a status bar (connection,
+cam/thermal dots, Save-to-NVS, Reboot):
+
+- **RGB camera** — polled hi-res preview (960×540) + full-res download buttons
+  (HD / FHD) + SSTV trigger.
+- **LWIR camera** — polled thermal preview. NOTE: the MI1602 readout path works,
+  but the MI48 isn't yet producing a calibrated frame (task #27), so this shows
+  live *uncalibrated* FPA noise until thermal bring-up finishes — not a fault.
+- **Image tuning** — AWB toggle, WB R/B, black level, 3×3 CCM.
+- **Auto exposure** — AE target + enable, manual exp/gain override.
+- **OTA update** — pick a `.bin`, upload, auto-reboot (with rollback).
+- **Console** — auto-tails `/api/log` every 1.5 s (auto-scrolls when at bottom).
+
+Only the active tab's heavy poller runs, so switching tabs is what starts/stops
+each preview or the log tail.
 
 ## Done since P2
 
-Live preview (`/stream`, `/snapshot.jpg`), OTA, `/api/log`, on-demand ISP,
+Tabbed web UI, poll-based per-view preview (`/snapshot.jpg?view=`), full-res
+HD+FHD download (`/capture.jpg?res=`), auto-tailing console, OTA, `/api/log`,
 system-health telemetry + reboot + NVS-persisted settings, live colour tuning
-(AWB / WB / black-level / CCM) + focus aid, HD still (`/capture.jpg`), and
-web-triggered SSTV. **All hardware-verified (2026-06-06)** at move-imager.local,
-including a full OTA round-trip.
+(AWB / WB / black-level / CCM) + focus aid, and web-triggered SSTV. **All
+hardware-verified (2026-06-06)** at move-imager.local, including a full OTA
+round-trip and console responsiveness under preview load.
 
 ## Still TODO
 
 - RS422 link + command dispatch to the OBC — the flight comms (task #28 step 2).
 - Board temperature (AT30TS74 @0x48) — needs the LP-I²C bus brought up.
-- Store the HD still to the FAT `storage` partition (pairs with RS422 downlink).
+- Store the FHD still to the FAT `storage` partition (pairs with RS422 downlink).
 - Re-check SDIO at 40 MHz (the C6 reports the PCB supports it; we run 20 MHz).
-- MI1602 thermal still stuck BOOTING_UP (task #27, hardware).
+- WiFi link can flap at low RSSI (≲ -80 dBm), and a marginal USB rail can brown
+  out the board under camera+radio load — keep it near the AP on solid power.
+- MI1602 thermal: I²C/SPI readout is live, but the MI48 isn't producing a
+  calibrated frame yet (task #27, hardware) — the LWIR tab shows raw noise.

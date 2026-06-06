@@ -1587,7 +1587,9 @@ over SDIO via `esp_wifi_remote` + `esp_hosted`. P4 host Slot-1 flexible GPIOs,
 addon-wired to **G42-48** (CLK43/CMD44/D0-3=45-48/RST42). The addon's
 pre-flashed ESP-Hosted slave fw was compatible first try — **no C6 reflash**.
 
-**Status.**
+**Status.** _(Web UI later reworked to a 6-tab layout + poll-based preview; the
+MJPEG `/stream` was removed — see §13.1. The `/stream` / on-demand-ISP notes
+below are the original P3 design, kept for history.)_
 - **HW-verified:** P1 link+STA (`got ip 10.200.0.121`) and P2 telemetry+control
   (`/`, `/api/tlm`, `/api/cmd`). Live timing telemetry confirmed software-ISP
   ~0.66 s, USB ~0.36 s per frame.
@@ -1620,9 +1622,9 @@ Kconfig-gated; flight dead-strips them).
 
 **RESUME (board must be connected):**
 1. One **USB flash** of the ground build (`_build_ground.bat` → `_flash.bat`)
-   to put the OTA-capable image on the board — the board currently runs the
-   P2 image (no OTA). `_erase_flash.bat` first only if the partition layout
-   changed.
+   to put the OTA-capable image on the board. _(Done 2026-06-06 — this whole
+   RESUME list is complete; the board runs the full ground image. Kept for
+   history.)_ `_erase_flash.bat` first only if the partition layout changed.
 2. Then verify the untested pile: open `http://move-imager.local/` → live
    preview (`/stream`), telemetry, a `/api/ota` upload round-trip, `/api/log`,
    and confirm idle ISP≈0 (on-demand) when no viewer.
@@ -1646,6 +1648,42 @@ online, up≈22 s). Two HW-only bugs found + fixed during bring-up:
 **NEXT (still held by user):** RS422 OBC link + command dispatch (task #28
 step 2) — new `rs422` module on UART0 (TX37/RX38/DE39),
 `SYNC|LEN|TYPE|SEQ|payload|CRC16` parser, `PING/GET_TLM/CAPTURE` dispatch.
+
+### 13.1 Web UI rework — tabs + poll-based per-view preview (2026-06-06)
+
+Reworked the single page into **six tabs** (RGB / LWIR / image-tuning /
+auto-exposure / OTA / console) over a persistent telemetry dashboard + status bar.
+
+**Why MJPEG `/stream` is gone.** esp_http_server runs handlers in a **single
+worker task**; a `/stream` MJPEG response loops forever, so once any browser
+opened the preview it starved `/api/tlm` + `/api/log` — that was the "console
+shows nothing" bug. Fix: drop `/stream`, make previews **poll-based**
+`/snapshot.jpg?view=rgb|lwir` — each request renders one view in the worker,
+sends, returns, freeing the worker between frames. Verified: under a continuous
+snapshot flood, `/api/tlm` + `/api/log` still answer in ≤2.5 s (bounded by one
+render), never hang. The console tab auto-tails `/api/log` every 1.5 s.
+
+**Per-view + full-res.** `/snapshot.jpg?view=rgb` (default 960×540) and
+`?view=lwir` (480×360) share the render path; LWIR via new `ground_render_lwir`
+→ `mi1602_aux_capture_rgb565`. `/capture.jpg?res=hd|fhd` downloads 1280×720 or
+1920×1080; **FHD is the ceiling** — native 4K RGB565 (16.6 MB) won't fit beside
+the capture buffer. Shared JPEG input buffer bumped to FHD (~4 MB; PSRAM has
+room — ~10 MB free after). Render moved entirely off the camera task into the
+httpd worker, so `want_preview` stays off (nothing increments `s_stream_clients`)
+and the camera task's `isp_us`≈0.
+
+**LWIR reality:** MI1602 I²C+SPI readout is live (`device found at 0x41`,
+`bootup OK status=0x00`), but the MI48 still isn't producing a calibrated frame
+(task #27) — the LWIR tab shows live *uncalibrated* FPA noise, labelled as such,
+not "offline".
+
+**HW-verified (2026-06-06):** tabs, poll-based RGB preview, FHD/HD download,
+auto-tailing console, and console responsiveness under preview load — all pass
+at move-imager.local. Touches `ground_http.c` (handlers), `app_sc850sl.c`
+(`ground_render_lwir`), `ground_station.h`, `ground_index.html`. Field note: at
+low RSSI (≲ -80 dBm) the C6 STA can flap connect/reconnect, and a marginal USB
+rail can brown out under camera+radio load — keep the board near the AP on solid
+power.
 
 ---
 

@@ -1637,6 +1637,18 @@ bool ground_render_hd(void *dst, int w, int h)
     if (g_capture_mutex) xSemaphoreGive(g_capture_mutex);
     return true;
 }
+
+/* Render the thermal (LWIR) view into dst at w x h RGB565 for the ground
+ * station's LWIR preview tab. Mirrors ground_render_hd but pulls a fresh frame
+ * from the MI1602 aux camera instead of the visible software ISP. Returns false
+ * when the MI1602 is absent/offline (still BOOTING_UP, task #27) so the handler
+ * answers 503 and the web UI shows "thermal offline". No g_capture_mutex here —
+ * mi1602_aux_capture_rgb565 owns its own I2C/frame buffer. */
+bool ground_render_lwir(void *dst, int w, int h)
+{
+    if (!dst) return false;
+    return mi1602_aux_capture_rgb565((uint16_t *)dst, w, h, w) == ESP_OK;
+}
 #endif
 
 /* ---------------------------------------------------------------- *
