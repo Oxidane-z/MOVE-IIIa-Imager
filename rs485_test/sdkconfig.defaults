@@ -1,0 +1,6 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+# Console on USB-Serial-JTAG (the Stamp-P4's native USB), so UART0 — and the
+# boot-time ROM log it normally carries — stays completely off the RS485 bus.
+# The bridge uses UART1 for RS485.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
