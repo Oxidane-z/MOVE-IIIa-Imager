@@ -116,7 +116,7 @@
     <span style="color:#8a93a3">- turn off to stop polling the MI1602</span></label></div>
   <img id="lwirimg" class="preview" alt="LWIR preview">
   <div class="pmsg" id="lwirmsg">loading thermal...</div>
-  <div class="hint">Live raw output from the MI1602 FPA (160x120, twilight colormap, nearest-neighbour upscaled). The MI48 ASIC is not yet producing a calibrated frame (task #27), so until thermal bring-up is finished expect uncalibrated noise rather than a real scene - the I2C + SPI readout path itself is confirmed working. If the camera is absent the endpoint returns 503 and this shows "thermal offline".</div>
+  <div class="hint">Live MI1602 FPA output (160x120, twilight colormap, nearest-neighbour upscaled). The MI48 boots and streams real thermal frames; any background speckle is read noise from the SPI frame transfer (per-frame CRC is tracked in the device log). If the camera is absent the endpoint returns 503 and this shows "thermal offline".</div>
 </section>
 
 <!-- Image tuning -->

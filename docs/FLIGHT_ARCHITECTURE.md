@@ -14,7 +14,7 @@
 | Visible cam | SmartSens **SC850SL** (4K) | MIPI-CSI 2-lane RAW10, **I2C0**, XSHUTDN GPIO54 | host-driven exposure/gain (vendor recipe; no internal AEC) |
 | Thermal cam | Meridian **MI1602 / MI48** (160×120) | **I2C1** control + **SPI2** data, DATA_READY GPIO8 | I²C addr 0x40/0x41 **auto-detected** (ADDR strap floats) |
 | Audio/SSTV | PCM5102A DAC | **I2S** (MCLK20/BCK21/LRCK23/DIN22) | Robot36 SSTV TX out the audio chain |
-| OBC link | RS422 transceiver | **UART0: TX=GPIO37, RX=GPIO38, DE=GPIO39** | the lifeline; full-duplex (RX always-on, DE gates TX); console is on USB so U0 is free |
+| OBC link | RS485 transceiver (TI **THVD1424RGTR**, full-duplex) | **UART0: TX=GPIO37, RX=GPIO38, DE=GPIO39** | the lifeline; **4-wire full-duplex** — RX always-on, DE (GPIO39) enables the driver (tie enabled for point-to-point, or gate around TX). Use normal UART mode, NOT UART_MODE_RS485_HALF_DUPLEX (that is for 2-wire). Console on USB so U0 is free |
 | Board temp | Microchip **AT30TS74** | **LP-I²C: SCL=LP_GPIO7, SDA=LP_GPIO1**, addr **0x48** | read by the LP core for health telemetry (works while HP cores sleep). LP_GPIO8 avoided — it is MI1602 DATA_READY. |
 | Ground WiFi | ESP32-C6 addon | **SDIO** (esp_wifi_remote / ESP-Hosted) | **ground test only**, not populated/active in flight |
 | Storage | internal flash | dual-OTA + FAT `storage` | see §12 OTA |
@@ -25,14 +25,14 @@
 
 1. **OBC is master; the payload is a command-driven responder.** The OBC
    orchestrates; the payload executes and reports.
-2. **RS422 is the lifeline** (control + telemetry + recovery + firmware). It
+2. **RS485 is the lifeline** (control + telemetry + recovery + firmware). It
    gets a dedicated core and the highest task priority and is **never blocked**
    by imaging/encoding.
 3. **Autonomous-beacon default (the key fault-tolerance rule).** The OBC owns a
    **hardware power switch to the P4**, so the payload only runs when the OBC
    has powered it — a *dead* OBC just means the board is never powered, which
    needs no software handling. The fault we DO handle is **"powered, but the
-   RS422 link is down":** with no usable OBC link the payload **autonomously
+   RS485 link is down":** with no usable OBC link the payload **autonomously
    captures and beacons SSTV, alternating visible / thermal**, so a broken comms
    link never stops it from doing useful, ground-receivable work. (SSTV is
    decodable by any ham ground station.) The OBC's power switch is the ultimate
@@ -72,7 +72,7 @@
 | `lp_supervisor`| **LP** | — | heartbeat watchdog; reads AT30TS74 temp on LP-I²C; telemetry; low-power manager; RAM scrub |
 
 **Split logic:** HP0 = heavy compute (cameras / ISP / JPEG / OTA); HP1 =
-real-time I/O (RS422 lifeline + I2S); LP = independent safety net.
+real-time I/O (RS485 lifeline + I2S); LP = independent safety net.
 
 ---
 
@@ -94,21 +94,21 @@ real-time I/O (RS422 lifeline + I2S); LP = independent safety net.
    │    RGB⇄LWIR, low duty)        ota / ...)           │
    │        ▲  │ OBC: SET_MODE(standby)                 │
    │        │  ▼                                        │
-   │     STANDBY (low power, RS422 stays responsive) ───┘
+   │     STANDBY (low power, RS485 stays responsive) ───┘
    │        │
-   └────────┘  RS422 silent > T_link   (from ANY mode → AUTONOMOUS)
+   └────────┘  RS485 silent > T_link   (from ANY mode → AUTONOMOUS)
 
          any unrecoverable fault / reset-loop
                        ▼
-                    SAFE  (RS422 + telemetry only, no imaging, await OBC)
+                    SAFE  (RS485 + telemetry only, no imaging, await OBC)
 ```
 
 - **AUTONOMOUS (default + fallback):** the state after SELFTEST, and re-entered
-  from any mode when RS422 is silent for `T_link`. Every `T_beacon` (tunable)
+  from any mode when RS485 is silent for `T_link`. Every `T_beacon` (tunable)
   capture a frame and SSTV-transmit it, **alternating visible / thermal**; low
-  duty cycle. (Because the OBC powered us on, it normally tasks us over RS422
+  duty cycle. (Because the OBC powered us on, it normally tasks us over RS485
   before the first beacon fires; autonomous is what runs if it doesn't / can't.)
-- **One simple fallback rule:** *RS422 silent for `T_link` → AUTONOMOUS, from
+- **One simple fallback rule:** *RS485 silent for `T_link` → AUTONOMOUS, from
   any mode.* We are powered (so the OBC wants us on) but can no longer be told
   what to do → do the useful default. **No "dead-man" logic** — if the OBC
   wanted us off/quiet it would cut power.
@@ -116,9 +116,9 @@ real-time I/O (RS422 lifeline + I2S); LP = independent safety net.
   a specific operation, then we return to AUTONOMOUS (or STANDBY if commanded).
 - **STANDBY:** an OBC-commanded quiet/low-power state for short windows where
   fast resume matters (avoids a cold boot + camera bring-up). Persists only
-  while RS422 is healthy; on link loss it too falls back to AUTONOMOUS. For long
+  while RS485 is healthy; on link loss it too falls back to AUTONOMOUS. For long
   dormancy the OBC cuts power instead.
-- **SAFE:** repeated faults / reset-loops (tracked in RTC RAM) → RS422 +
+- **SAFE:** repeated faults / reset-loops (tracked in RTC RAM) → RS485 +
   telemetry only, imaging off; awaits OBC to diagnose / re-init / re-flash.
 
 ---
@@ -126,7 +126,7 @@ real-time I/O (RS422 lifeline + I2S); LP = independent safety net.
 ## 6. Interaction model
 
 ```
- OBC ──RS422──>┌─────────────┐  cmd_q   ┌──────────────┐
+ OBC ──RS485──>┌─────────────┐  cmd_q   ┌──────────────┐
                │ rs422_link  │ ───────► │ cmd_dispatch │  state machine
                │ HP1 · high  │ ◄─────── │    HP0       │  + OBC-link timer
                └─────────────┘ result/  └──────┬───────┘
@@ -144,16 +144,16 @@ real-time I/O (RS422 lifeline + I2S); LP = independent safety net.
 ```
 
 Three data flows: **(1) commands** (small, `cmd_q`); **(2) bulk data** (frames
-in the pool, pointers handed around, streamed over RS422 in CRC'd windows);
+in the pool, pointers handed around, streamed over RS485 in CRC'd windows);
 **(3) telemetry/health** (LP collects → shared struct → served on OBC request).
 
-**Backpressure = drop**, never block: if a consumer (RS422/I2S) is slow, the
+**Backpressure = drop**, never block: if a consumer (RS485/I2S) is slow, the
 producer (camera) reuses the oldest buffer and skips a frame. Comms congestion
 must never freeze capture.
 
 ---
 
-## 7. RS422 ↔ OBC protocol
+## 7. RS485 ↔ OBC protocol
 
 - **Frame:** `SYNC(2) | LEN(2) | TYPE(1) | SEQ(1) | PAYLOAD(LEN) | CRC16(2)`.
 - **Command/response:** each command → `ACK(status)` or `NACK(errcode)`.
@@ -173,13 +173,13 @@ must never freeze capture.
 |---|-------------|--------------|
 | 1 | Reliable dual-camera bring-up + capture | `camera` task: retry'd bring-up (SC850SL I²C retries, MI1602 addr auto-detect, WDT-safe writes); independent — one down ≠ both down |
 | 2 | Encode SSTV, TX over I2S | `sstv_i2s`: Robot36 encode → continuous I2S DMA |
-| 3 | Reliable RS422 ↔ OBC | `rs422_link` framed protocol, own core/high prio, ARQ |
-| 4 | OBC stores HD image (over RS422) | `camera`→`jpeg_store`→ `rs422_link` `IMG_GET` windowed CRC download |
+| 3 | Reliable RS485 ↔ OBC | `rs422_link` framed protocol, own core/high prio, ARQ |
+| 4 | OBC stores HD image (over RS485) | `camera`→`jpeg_store`→ `rs422_link` `IMG_GET` windowed CRC download |
 | 5 | OBC transmits "something else" via I2S | OBC sends payload → `TX_I2S(mode)` → `sstv_i2s` encodes per mode → I2S out |
-| 6 | OBC firmware update (over RS422) | `OTA` chunks → `esp_ota` (transport-agnostic) → verify + rollback + reboot |
+| 6 | OBC firmware update (over RS485) | `OTA` chunks → `esp_ota` (transport-agnostic) → verify + rollback + reboot |
 | 7 | Error handling / self-recovery / low-power / rad | §9, §10, §11 |
 | 8 | Ground test with WiFi module | `wifi_ground` (C6/SDIO), ground-only; flight path identical without it |
-| — | **Survive RS422 failure** | **AUTONOMOUS beacon default (§5)** — capture + SSTV (RGB⇄LWIR) with no OBC |
+| — | **Survive RS485 failure** | **AUTONOMOUS beacon default (§5)** — capture + SSTV (RGB⇄LWIR) with no OBC |
 
 ---
 
@@ -202,8 +202,8 @@ must never freeze capture.
 > software modes below are the *fast-resume* low-power options while powered.
 
 - **AUTONOMOUS idle gap:** tickless + light-sleep between beacons; HP wakes on
-  RS422 RX or the beacon timer; LP stays alive.
-- **STANDBY:** commanded quiet state — sleep the heavy work, keep RS422
+  RS485 RX or the beacon timer; LP stays alive.
+- **STANDBY:** commanded quiet state — sleep the heavy work, keep RS485
   responsive for instant re-tasking; power down the camera rails (rail-enable
   GPIOs) + lower CPU freq. Much faster to resume than a cold boot.
 - **Full off:** the OBC flips the power switch (eclipse / long dormancy); no
@@ -234,7 +234,7 @@ must never freeze capture.
 - **Flow:** `esp_ota_begin(inactive)` → `esp_ota_write` chunks →
   `esp_ota_end` (SHA256) → `esp_ota_set_boot_partition` → reboot → first-boot
   self-test → `mark_app_valid` else **rollback**.
-- **Transport-agnostic:** the same `ota_feed_chunk()` core is fed by RS422
+- **Transport-agnostic:** the same `ota_feed_chunk()` core is fed by RS485
   (flight) or WiFi/`esp_https_ota` (ground).
 - **Power-fail safe** (inactive-slot write + atomic otadata flip).
   **LP supervisor** watches the new image's first boot → forces rollback if it
@@ -248,7 +248,7 @@ must never freeze capture.
 - C6 over **SDIO** (`esp_wifi_remote` / ESP-Hosted; Tab5 is the reference).
 - Brought up only in **ground mode** (build flag / NVS flag / C6-present
   detect); in flight `wifi_ground` is never started.
-- Provides: fast UDP preview + `esp_https_ota`. The flight RS422 paths are
+- Provides: fast UDP preview + `esp_https_ota`. The flight RS485 paths are
   byte-identical with or without WiFi (shared transport-agnostic cores).
 
 ---
@@ -257,25 +257,29 @@ must never freeze capture.
 
 1. **OTA foundation** — dual-slot partition table + rollback + first-boot
    self-test hook. (No hardware dependency; non-breaking.)
-2. **RS422 link + `cmd_dispatch` skeleton** — `PING / GET_TLM / CAPTURE` first;
+2. **RS485 link + `cmd_dispatch` skeleton** — `PING / GET_TLM / CAPTURE` first;
    stabilise the lifeline.
 3. **AUTONOMOUS beacon mode** — capture + SSTV, RGB⇄LWIR, low duty; OBC-silence
-   fallback + dead-man. (Delivers the "works without RS422" guarantee early.)
+   fallback + dead-man. (Delivers the "works without RS485" guarantee early.)
 4. **Multi-core refactor** — cameras/ISP on HP0, rs422/i2s on HP1, frame-buffer
    pool + queues, LP heartbeat supervisor.
-5. **Bulk paths** — `IMG_GET` download, `TX_I2S`, OTA-over-RS422.
+5. **Bulk paths** — `IMG_GET` download, `TX_I2S`, OTA-over-RS485.
 6. **Hardening** — WiFi ground channel, low-power modes, scrub/TMR.
 
 ---
 
 ## 15. Open questions / TBD
 
-- RS422: **resolved** → UART0 (TX=GPIO37, RX=GPIO38), DE=GPIO39, full-duplex
-  (RX always-on). Still TBD: transceiver part #, baud rate, DE assert/turnaround
-  timing.
+- RS485: **resolved** → UART0 (TX=GPIO37, RX=GPIO38), DE=GPIO39, **4-wire
+  full-duplex** (RX always-on). Transceiver = TI **THVD1424RGTR** (3–5.5 V bus /
+  1.65–5.5 V logic; pin-selected SLR: 20 Mbps or slew-limited 500 kbps; on-chip
+  120 Ω termination via TERM_TX/TERM_RX; ±8 kV IEC-61000-4-2 ESD). Still TBD:
+  baud + SLR mode (slew-limited 500 kbps is the robust/low-EMI default for the
+  harness unless the image-download throughput needs the 20 Mbps mode), and
+  whether the P4 is an end node (enable its on-chip termination).
 - C6 addon: exact P4 GPIOs behind `SDIO2_*` (from the Stamp-P4 pinmap) —
   confirm no clash with the camera/thermal/audio header.
-- `T_beacon` (autonomous beacon duty cycle) and `T_link` (RS422-silence timeout
+- `T_beacon` (autonomous beacon duty cycle) and `T_link` (RS485-silence timeout
   before falling back to AUTONOMOUS).
 - (The beacon need NOT be power-aware: the OBC gates gross power via its switch,
   so the payload doesn't read bus voltage to decide whether to beacon.)

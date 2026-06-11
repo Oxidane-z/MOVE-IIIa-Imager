@@ -66,7 +66,12 @@ CONFIG_MI1602_I2C_FREQ_HZ=100000
 # device at 0x41, not the 0x40 default).
 CONFIG_MI1602_I2C_ADDR_HIGH=y
 CONFIG_MI1602_SPI_HOST=2
-CONFIG_MI1602_SPI_FREQ_HZ=15600000
+# MI48 frame read is a manual-CS chunked SPI transfer across the flex. 15.6 MHz
+# decoded a usable image, but the per-frame CRC kept mismatching and the FPA
+# background was speckled — classic byte-level read glitches at too high a clock
+# over a flex. Halved to 7.8 MHz: ~38 ms for a 38 KB frame (fine for the ~1 fps
+# thermal preview) for a cleaner, CRC-valid read. Raise only if frames stay clean.
+CONFIG_MI1602_SPI_FREQ_HZ=7800000
 CONFIG_MI1602_SPI_SCLK_GPIO=28
 CONFIG_MI1602_SPI_MISO_GPIO=29
 CONFIG_MI1602_SPI_MOSI_GPIO=30

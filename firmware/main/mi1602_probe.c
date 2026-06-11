@@ -234,7 +234,11 @@ esp_err_t mi1602_aux_capture_rgb565(uint16_t *dst, int dw, int dh, int dst_strid
     mi1602_frame_header_t hdr;
     esp_err_t r = mi1602_capture_single(g_mi1602, px, &hdr);
     if (r != ESP_OK) return r;
-    if (hdr.crc_ok) s_aux_temp_c = hdr.senxor_temperature - 273.15f;  /* K -> C */
+    /* Die temp is a header word, independent of the pixel-payload CRC — so gate
+     * on a sane range, not crc_ok (a CRC mismatch from a noisy pixel read does
+     * not invalidate the temperature reading). */
+    float tc = hdr.senxor_temperature - 273.15f;   /* K -> C */
+    if (tc > -40.0f && tc < 125.0f) s_aux_temp_c = tc;
 
     /* Auto-range over the frame for the colormap. */
     uint16_t mn = 0xffff, mx = 0;

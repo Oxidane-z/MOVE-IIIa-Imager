@@ -1428,7 +1428,7 @@ static void usb_stream_send(int cycle)
             .ae_target = g_ae_target, .ae_enabled = g_ae_enabled,
             .t_cap_us = t_cap1 - t_cap0, .t_isp_us = t_ds1 - t_ds0,
             .t_usb_us = t_usb1 - t_usb0,
-            .cam_streaming = (g_stream_en && g_cam_ready), .thermal_ok = (tr == ESP_OK),
+            .cam_streaming = (g_stream_en && g_cam_ready), .thermal_ok = mi1602_aux_available(),
             .heap_free  = (uint32_t)esp_get_free_heap_size(),
             .heap_min   = (uint32_t)esp_get_minimum_free_heap_size(),
             .psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
