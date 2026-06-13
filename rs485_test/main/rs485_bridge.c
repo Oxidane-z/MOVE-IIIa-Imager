@@ -14,9 +14,11 @@
  * banner = nothing is arriving over RS485 = check wiring / DE / termination.
  *
  * Wiring (THVD1424, full-duplex) — see README.md:
- *   P4 UART1 TX = GPIO37 -> transceiver D  (DI, driver input)
- *   P4 UART1 RX = GPIO38 <- transceiver R  (RO, receiver output)
+ *   P4 UART1 TX = GPIO38 -> transceiver DI (driver input)
+ *   P4 UART1 RX = GPIO37 <- transceiver RO (receiver output)
  *   P4        DE = GPIO39 -> transceiver DE (driver enable, active-high)
+ * (TX/RX are assigned to match the board wiring via the GPIO matrix — the
+ *  transceiver's RO is on G37 and DI on G38, so G37=RX and G38=TX.)
  *   transceiver RE tied enabled in HW (or set RS485_RE_GPIO below)
  * Because it's full-duplex point-to-point, the driver is held enabled and the
  * receiver is always live — this is NORMAL UART mode, NOT the half-duplex RS485
@@ -32,8 +34,8 @@
 #include "esp_mac.h"
 
 #define RS485_UART      UART_NUM_1
-#define RS485_TX_GPIO   37        /* -> transceiver D  (DI)            */
-#define RS485_RX_GPIO   38        /* <- transceiver R  (RO)            */
+#define RS485_TX_GPIO   38        /* -> transceiver DI (driver input)   */
+#define RS485_RX_GPIO   37        /* <- transceiver RO (receiver output) */
 #define RS485_DE_GPIO   39        /* -> transceiver DE (active-high)   */
 #define RS485_RE_GPIO   (-1)      /* -> transceiver RE (active-low); -1 if tied enabled in HW */
 #define RS485_BAUD      115200

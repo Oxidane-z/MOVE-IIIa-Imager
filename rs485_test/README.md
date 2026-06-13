@@ -21,8 +21,8 @@ Per board, P4 ↔ THVD1424:
 
 | P4 (UART1) | THVD1424 | note |
 |---|---|---|
-| GPIO37 (TX) | `D` (DI, driver input) | |
-| GPIO38 (RX) | `R` (RO, receiver output) | |
+| GPIO38 (TX) | `DI` (driver input) | board wiring: DI on G38 |
+| GPIO37 (RX) | `RO` (receiver output) | board wiring: RO on G37 |
 | GPIO39 (DE) | `DE` (driver enable) | active-high; held high by the app |
 | — | `RE` (receiver enable) | tie enabled (active-low → GND), or wire to a GPIO and set `RS485_RE_GPIO` |
 
