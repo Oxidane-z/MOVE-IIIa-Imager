@@ -65,5 +65,25 @@ Then flash each board from its laptop with `idf.py -p <COMx> flash monitor`
 ## Tuning
 
 Edit the `#define`s at the top of `main/rs485_bridge.c`: pins, `RS485_BAUD`
-(115200 default — raise once the link is proven), and `RS485_RE_GPIO` if `RE`
-is on a GPIO rather than tied enabled.
+(115200 default — raise once the link is proven), `RS485_RE_GPIO` if `RE` is on a
+GPIO rather than tied enabled, and **`RS485_INVERT_RX`** (invert RXD to
+compensate for a reversed A/B differential pair — see below).
+
+`hexcap.py <COMx> <secs>` dumps the raw received console bytes as hex — handy for
+diagnosing a garbled link (deterministic garbage = inverted/wrong-framed, not a
+dead wire).
+
+## Verified (2026-06-07)
+
+Two Stamp-P4 (**rev v1.3**) boards, THVD1424 full-duplex, exchanged clean
+heartbeats **both directions** (`[<id>] hb #N` counter advancing, no drops).
+
+Two gotchas hit + fixed during bring-up, both recorded in the source:
+
+- **Chip revision:** these are P4 **rev v1.3** engineering silicon; a fresh
+  IDF v6.0.1 project defaults to rev v3.x and refuses to flash. Fixed in
+  `sdkconfig.defaults` (`ESP32P4_SELECTS_REV_LESS_V3=y` + `REV_MIN_0`).
+- **Swapped A/B pair:** the differential pair was wired reverse-polarity, so the
+  receiver saw inverted logic → deterministic garbage. Fixed in software with
+  `RS485_INVERT_RX=1` (`uart_set_line_inverse(..., UART_SIGNAL_RXD_INV)`), no
+  rewiring. If you wire A/B straight, set `RS485_INVERT_RX 0`.

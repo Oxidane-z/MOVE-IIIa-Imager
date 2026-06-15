@@ -40,6 +40,10 @@
 #define RS485_RE_GPIO   (-1)      /* -> transceiver RE (active-low); -1 if tied enabled in HW */
 #define RS485_BAUD      115200
 #define BUF_SZ          512
+/* Set 1 if the A/B differential pair is wired with reversed polarity: the
+ * received logic is then inverted, so we invert RXD in the UART to compensate
+ * (no rewiring). Symmetric link -> set the same on both boards. */
+#define RS485_INVERT_RX 1
 
 static char s_id[8];              /* short node id from the factory MAC */
 
@@ -120,6 +124,9 @@ void app_main(void)
     uart_param_config(RS485_UART, &uc);
     uart_set_pin(RS485_UART, RS485_TX_GPIO, RS485_RX_GPIO,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+#if RS485_INVERT_RX
+    uart_set_line_inverse(RS485_UART, UART_SIGNAL_RXD_INV);
+#endif
 
     char banner[320];
     int bl = snprintf(banner, sizeof banner,

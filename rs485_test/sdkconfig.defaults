@@ -1,5 +1,12 @@
 CONFIG_IDF_TARGET="esp32p4"
 
+# The flight boards are ESP32-P4 rev v1.3 (engineering silicon). IDF v6.0.1
+# defaults to v3.x and refuses to flash v1.3 — and the v0.x/v1.x rev options are
+# gated behind ESP32P4_SELECTS_REV_LESS_V3 (rev <3.0 vs >=3.0 are mutually
+# exclusive). Enable that gate, then pin min-rev v0.0 (matches the imager).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_0=y
+
 # Console on USB-Serial-JTAG (the Stamp-P4's native USB), so UART0 — and the
 # boot-time ROM log it normally carries — stays completely off the RS485 bus.
 # The bridge uses UART1 for RS485.
