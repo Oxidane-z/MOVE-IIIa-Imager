@@ -1,0 +1,17 @@
+import serial, time, sys
+A, B = sys.argv[1], sys.argv[2]
+a = serial.Serial(A, 115200, timeout=0.3)
+b = serial.Serial(B, 115200, timeout=0.3)
+time.sleep(0.8)
+a.reset_input_buffer(); b.reset_input_buffer()
+a.write(b'MSG-from-A\r\n'); a.flush()
+time.sleep(1.3)
+gb = b.read(2048)
+b.write(b'MSG-from-B\r\n'); b.flush()
+time.sleep(1.3)
+ga = a.read(2048)
+a.close(); b.close()
+print(f"{B} got (typed on {A}):", repr(gb))
+print(f"{A} got (typed on {B}):", repr(ga))
+print("A->B typing:", "PASS" if b'MSG-from-A' in gb else "FAIL")
+print("B->A typing:", "PASS" if b'MSG-from-B' in ga else "FAIL")

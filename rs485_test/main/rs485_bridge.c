@@ -38,7 +38,7 @@
 #define RS485_RX_GPIO   37        /* <- transceiver RO (receiver output) */
 #define RS485_DE_GPIO   39        /* -> transceiver DE (active-high)   */
 #define RS485_RE_GPIO   (-1)      /* -> transceiver RE (active-low); -1 if tied enabled in HW */
-#define RS485_BAUD      115200
+#define RS485_BAUD      3000000
 #define BUF_SZ          512
 /* Set 1 if the A/B differential pair is wired with reversed polarity: the
  * received logic is then inverted, so we invert RXD in the UART to compensate

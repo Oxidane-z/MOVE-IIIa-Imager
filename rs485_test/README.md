@@ -65,18 +65,30 @@ Then flash each board from its laptop with `idf.py -p <COMx> flash monitor`
 ## Tuning
 
 Edit the `#define`s at the top of `main/rs485_bridge.c`: pins, `RS485_BAUD`
-(115200 default — raise once the link is proven), `RS485_RE_GPIO` if `RE` is on a
-GPIO rather than tied enabled, and **`RS485_INVERT_RX`** (invert RXD to
-compensate for a reversed A/B differential pair — see below).
+(**3000000** = 3 Mbps default; the link tested clean to 15 Mbps, so you can go
+much higher), `RS485_RE_GPIO` if `RE` is on a GPIO rather than tied enabled, and
+**`RS485_INVERT_RX`** (invert RXD to compensate for a reversed A/B differential
+pair — see below). The heartbeat is 1 s; raise its `vTaskDelay` if it clutters
+your chat.
 
-`hexcap.py <COMx> <secs>` dumps the raw received console bytes as hex — handy for
-diagnosing a garbled link (deterministic garbage = inverted/wrong-framed, not a
-dead wire).
+Helper scripts (run with the IDF python): `hexcap.py <COMx> <secs>` dumps the raw
+received bytes as hex (deterministic garbage = inverted/wrong-framed, not a dead
+wire); `typetest.py <COMa> <COMb>` injects a message on each port and checks it
+arrives on the other — the automated version of "type in one window, watch the
+other".
 
-## Verified (2026-06-07)
+## Verified
 
-Two Stamp-P4 (**rev v1.3**) boards, THVD1424 full-duplex, exchanged clean
-heartbeats **both directions** (`[<id>] hb #N` counter advancing, no drops).
+Two Stamp-P4 (**rev v1.3**) boards, THVD1424 full-duplex:
+
+- **Link (2026-06-07):** clean heartbeats **both directions** (`[<id>] hb #N`,
+  counter advancing, no drops).
+- **Baud sweep (2026-06-16):** clean every step from 460 800 up to **15 Mbps**
+  (460 k / 921 k / 1.84 M / 3.69 M / 5 M / 7.5 M / 10 M / 15 M). The ceiling is the
+  THVD1424's own 20 Mbps rating, not the wiring or the P4. Default left at 3 Mbps
+  for margin.
+- **Typing (2026-06-16):** injected a message on each console and saw it on the
+  other — bidirectional console <-> RS485 chat confirmed.
 
 Two gotchas hit + fixed during bring-up, both recorded in the source:
 
