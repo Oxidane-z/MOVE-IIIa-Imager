@@ -47,6 +47,17 @@ Web UI tabs (over a persistent telemetry dashboard + status bar):
 Telemetry includes board temperature (Microchip **AT30TS74** on LP-I²C) and the
 MI1602 SenXor die temperature.
 
+## RS485 link test (`rs485_test/`)
+
+A standalone ESP-IDF app that validates the flight **RS485 OBC link** (TI
+**THVD1424**, full-duplex). Flash the same image to two boards, wire their
+transceivers together (4-wire + GND); each board bridges its RS485 UART ↔ its USB
+console and sends a 1 s heartbeat, so two terminals become a live two-way serial
+chat over RS485. Used to characterise the link end-to-end: clean **both
+directions**, swept **clean to 15 Mbps** (default left at 3 Mbps for margin),
+with bidirectional typing confirmed. Includes `hexcap.py` / `typetest.py` debug
+helpers. See `rs485_test/README.md`.
+
 ## Repository layout
 
 ```
@@ -59,6 +70,7 @@ firmware/            ESP-IDF v6.0.1 project (the build)
     sstv_robot36/    Robot36 SSTV encoder
   tools/             host scripts: capture_serial.py, raw_grab.py, usb_preview.py
   _build*.bat / _flash.bat / _reset_capture.bat   Windows build/flash wrappers
+rs485_test/          standalone 2-board RS485 full-duplex link test (console bridge)
 docs/                GROUND_WIFI.md, FLIGHT_ARCHITECTURE.md, R&D notes
 reference/           vendor driver + register-table source copies, datasheet text
 CLAUDE.md            per-session guide
@@ -86,12 +98,14 @@ On Windows this repo uses wrapper `.bat` files (an MSYS/`export.bat` quirk):
 - **Working:** SC850SL 2-lane 4K RAW10 capture; software ISP-lite; closed-loop
   auto-exposure; MI1602 thermal capture (twilight false-colour); the full WiFi
   web ground station (preview, tuning, telemetry + board temp, OTA round-trip,
-  console) — all hardware-verified.
+  console) — all hardware-verified. **RS485 OBC-link transceiver (TI THVD1424)
+  bring-up** validated with `rs485_test/` — full-duplex, link clean to 15 Mbps.
 - **In progress:** MI1602 frame integrity — the MI48 boots and streams real
   thermal frames, but the chunked SPI frame read mismatches the per-frame CRC
   and leaves background speckle; being tuned (SPI clock / read path / on-chip
   filters). Tracked as task #27.
-- **Planned (flight):** RS485 OBC link + command dispatch; LP-core safety
+- **Planned (flight):** RS485 **framed protocol + command dispatch** to the OBC
+  (the physical link is validated; the protocol layer is next); LP-core safety
   supervisor (reads board temp on LP-I²C, heartbeat watchdog); thermal/visible
   registration. See `docs/FLIGHT_ARCHITECTURE.md`.
 
