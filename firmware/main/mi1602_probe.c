@@ -50,9 +50,13 @@ static volatile float s_aux_temp_c = -300.0f;
  *    module powers up. The firmware drive below is then just redundant
  *    insurance. Alternatively, wire the MI48 RESET_N to a GPIO and set
  *    CONFIG_MI1602_RESET_GPIO so we can: drive MODE low → pulse reset →
- *    module re-latches the correct mode. */
-#define MI1602_MODE_GPIO    10
-#define MI1602_MODE_LEVEL   0      /* LOW = I²C + SPI mode */
+ *    module re-latches the correct mode.
+ *
+ * GPIO10 is now wired as DataReady (DRDY), so the software MODE drive is
+ * DISABLED (-1) — driving it would fight the MI48's DRDY output. MODE must be a
+ * hardware pull-down to GND (which the caveat above requires regardless). */
+#define MI1602_MODE_GPIO    (-1)   /* was 10; that pin is now DataReady */
+#define MI1602_MODE_LEVEL   0      /* LOW = I²C + SPI mode (set via HW pull-down) */
 
 void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
 {

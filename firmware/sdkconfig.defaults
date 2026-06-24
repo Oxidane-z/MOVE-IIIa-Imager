@@ -53,8 +53,11 @@ CONFIG_SC850SL_I2C_FREQ_HZ=100000
 # MI1602 pins no longer collide with the SC850SL (which owns GPIO 9/11/54)
 # or PCM5102A (20-23). Current wiring:
 #   I²C (port 1): SDA = GPIO 12, SCL = GPIO 15
-#   MODE strap  : GPIO 10  (driven in mi1602_probe.c — board glue)
-#   DataReady   : GPIO 8   (active-high frame-ready input)
+#   DataReady   : GPIO 10  (active-high frame-ready input)
+#   MODE strap  : hardware pull-down to GND (was driven on GPIO 10, but that pin
+#                 is now DataReady — and the software drive was never effective
+#                 anyway since the MI48 latches MODE at its own power-on; see
+#                 mi1602_probe.c)
 #   SPI         : SCLK 28 / MISO 29 / MOSI 30 / CS 31  (SPI2_HOST)
 # I²C is on port 1 so it's fully independent of the SC850SL's port-0 bus.
 CONFIG_MI1602_ENABLED=y
@@ -77,7 +80,7 @@ CONFIG_MI1602_SPI_MISO_GPIO=29
 CONFIG_MI1602_SPI_MOSI_GPIO=30
 CONFIG_MI1602_SPI_CS_GPIO=31
 CONFIG_MI1602_RESET_GPIO=-1
-CONFIG_MI1602_DATA_READY_GPIO=8
+CONFIG_MI1602_DATA_READY_GPIO=10
 CONFIG_MI1602_SYSCLK_GPIO=-1
 
 # ---- CPU & FreeRTOS --------------------------------------------------------
