@@ -36,9 +36,13 @@
 static const char *TAG = "mi1602";
 
 #define MI1602_REG_TIMEOUT_MS    50
-#define MI1602_BOOT_TIMEOUT_MS   500
+/* pysenxor (senxor/mi48.py:406-410) polls BOOTING_UP with NO give-up timeout;
+ * our old 500 ms bailed while the SenXor was still coming up. Give it real
+ * time. DATA_READY likewise: the first single-frame after trigger can take
+ * more than one frame period at low FRAME_RATE_DIVIDER settings. */
+#define MI1602_BOOT_TIMEOUT_MS   3000
 #define MI1602_BOOT_POLL_MS      10
-#define MI1602_DATA_READY_TIMEOUT_MS 500
+#define MI1602_DATA_READY_TIMEOUT_MS 2000
 #define MI1602_DATA_READY_POLL_MS    5
 
 /* LEDC slot used by the optional sysclk output. TIMER_0/CH_0 are reserved
@@ -411,6 +415,50 @@ esp_err_t mi1602_capture_single(mi1602_handle_t h,
     return ESP_OK;
 }
 
+esp_err_t mi1602_capture_no_trigger(mi1602_handle_t h, uint16_t *out_pixels,
+                                    mi1602_frame_header_t *out_hdr)
+{
+    if (h == NULL || out_pixels == NULL) return ESP_ERR_INVALID_ARG;
+    const bool want_header = (out_hdr != NULL);
+
+    /* No FRAME_MODE write -- rely on the module already streaming / having a
+     * frame pending. Wait for DATA_READY (GPIO if wired, else STATUS poll),
+     * then read straight off SPI. This path never touches the I2C control
+     * write that NACKs while the module is stuck in BOOTING_UP. */
+    esp_err_t err = mi1602_wait_data_ready(h, MI1602_DATA_READY_TIMEOUT_MS);
+    if (err != ESP_OK) return err;
+
+    uint16_t hdr_words[MI1602_FRAME_HDR_WORDS];
+    err = mi1602_spi_read_frame(h, out_pixels, want_header ? hdr_words : NULL);
+    if (err != ESP_OK) return err;
+
+    if (want_header) {
+        mi1602_parse_header(hdr_words, out_hdr);
+        uint16_t crc_calc = mi1602_crc16_ccitt_false(out_pixels, MI1602_FPA_PIXELS);
+        out_hdr->crc_ok = (crc_calc == out_hdr->crc_from_header);
+    }
+    return ESP_OK;
+}
+
+esp_err_t mi1602_read_frame_now(mi1602_handle_t h, uint16_t *out_pixels,
+                                mi1602_frame_header_t *out_hdr)
+{
+    if (h == NULL || out_pixels == NULL) return ESP_ERR_INVALID_ARG;
+    const bool want_header = (out_hdr != NULL);
+
+    /* Straight to the SPI read -- no FRAME_MODE write, no DATA_READY wait. */
+    uint16_t hdr_words[MI1602_FRAME_HDR_WORDS];
+    esp_err_t err = mi1602_spi_read_frame(h, out_pixels, want_header ? hdr_words : NULL);
+    if (err != ESP_OK) return err;
+
+    if (want_header) {
+        mi1602_parse_header(hdr_words, out_hdr);
+        uint16_t crc_calc = mi1602_crc16_ccitt_false(out_pixels, MI1602_FPA_PIXELS);
+        out_hdr->crc_ok = (crc_calc == out_hdr->crc_from_header);
+    }
+    return ESP_OK;
+}
+
 /* ----------------------------------------------------------------------- */
 /*  Streaming                                                              */
 /* ----------------------------------------------------------------------- */
@@ -572,6 +620,15 @@ esp_err_t mi1602_init(const mi1602_config_t *cfg, mi1602_handle_t *out)
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address  = cfg->i2c_addr ? cfg->i2c_addr : MI1602_I2C_ADDR_DEFAULT,
         .scl_speed_hz    = cfg->i2c_freq_hz ? cfg->i2c_freq_hz : 100000,
+        /* Tolerate MI48 clock-stretching. The MI48 holds SCL low while it is
+         * busy -- notably during boot and between register accesses. With the
+         * default (0) the master gives up too early: longer writes (reg+data)
+         * NACK while shorter reads occasionally squeak through, which is exactly
+         * the "reads intermittent, writes all NACK, stuck BOOTING_UP" symptom we
+         * saw. 50 ms matches the sc850sl driver, which needs the same tolerance.
+         * (A newer MI48 batch that boots slower / stretches more makes the
+         * missing wait even more fatal.) */
+        .scl_wait_us     = 50 * 1000,
     };
     err = i2c_master_bus_add_device(cfg->i2c_bus, &devcfg, &m->i2c_dev);
     if (err != ESP_OK) {

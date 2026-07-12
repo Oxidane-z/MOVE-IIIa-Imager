@@ -150,3 +150,29 @@ esp_err_t mi1602_spi_read_frame(struct mi1602_t *m,
     }
     return ESP_OK;
 }
+
+esp_err_t mi1602_spi_read_raw(mi1602_handle_t h, uint8_t *buf, size_t n)
+{
+    struct mi1602_t *m = h;
+    if (m == NULL || buf == NULL || m->spi_dev == NULL) return ESP_ERR_INVALID_ARG;
+    if (n > m->spi_xfer_bytes) n = m->spi_xfer_bytes;   /* reuse zero-filled TX scratch */
+
+    gpio_set_level(m->cfg.cs_n_gpio, 0);
+    esp_rom_delay_us(MI1602_SPI_CS_SETTLE_US);
+    esp_err_t err = ESP_OK;
+    for (size_t off = 0; off < n; off += MI1602_SPI_CHUNK_BYTES) {
+        size_t c = n - off;
+        if (c > MI1602_SPI_CHUNK_BYTES) c = MI1602_SPI_CHUNK_BYTES;
+        spi_transaction_t t = {
+            .length    = c * 8,
+            .rxlength  = c * 8,
+            .tx_buffer = m->spi_tx_buf,   /* dummy 0x00 clocks */
+            .rx_buffer = buf + off,
+        };
+        err = spi_device_polling_transmit(m->spi_dev, &t);
+        if (err != ESP_OK) break;
+    }
+    esp_rom_delay_us(MI1602_SPI_CS_SETTLE_US);
+    gpio_set_level(m->cfg.cs_n_gpio, 1);
+    return err;
+}

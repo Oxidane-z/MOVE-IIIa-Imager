@@ -1,0 +1,11 @@
+# MI1602 thermal-only debug target overlay. Layered on top of sdkconfig.defaults
+# by _build_mi1602.bat via
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.mi1602"
+# so the flight (_build.bat) and Tab5 builds are completely unaffected.
+#
+# Selects the stripped-down MI1602_TEST app (app_mi1602_test.c) instead of the
+# SC850SL flight app. The MI1602 pin + address config (I2C port 1 SDA=12 SCL=15,
+# SPI 28/29/30/31, DRDY=10, ADDR high -> 0x41) is INHERITED from the base
+# sdkconfig.defaults, so this overlay only flips the camera target.
+# CONFIG_CAMERA_TARGET_SC850SL is not set
+CONFIG_CAMERA_TARGET_MI1602_TEST=y

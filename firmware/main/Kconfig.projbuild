@@ -27,6 +27,20 @@ choice CAMERA_TARGET
             is SC202CS.) Lets us validate ISP / I²S / SSTV / display
             pipelines while the SC850SL flight hardware is being
             prepared.
+
+    config CAMERA_TARGET_MI1602_TEST
+        bool "MI1602 thermal-only bring-up (debug)"
+        help
+            Stripped-down firmware that ONLY brings up + debugs the
+            MI1602 thermal camera -- no SC850SL, no CSI/ISP, no USB
+            stream, no SSTV. app_mi1602_test.c opens the MI1602 I2C bus,
+            detects the MI48 address (0x41 when ADDR is strapped high on
+            a clean reset, else 0x40), boots the module, then loops
+            single-frame captures printing thermal stats and dumps one
+            full frame over UART. NOTE: RESET_N is unwired on the
+            carrier -- power-cycle the whole board before use; a P4-only
+            reset leaves the MI48 in a stale state. Build with
+            _build_mi1602.bat.
 endchoice
 
 # ===== Tab5 SC202CS board pins (only relevant when target == Tab5) =====

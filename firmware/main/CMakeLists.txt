@@ -8,6 +8,8 @@ if(CONFIG_CAMERA_TARGET_SC850SL)
     list(APPEND srcs "app_sc850sl.c")
 elseif(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
     list(APPEND srcs "app_sc202cs_tab5.c")
+elseif(CONFIG_CAMERA_TARGET_MI1602_TEST)
+    list(APPEND srcs "app_mi1602_test.c")
 endif()
 
 # Components we always need.

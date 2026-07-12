@@ -21,6 +21,8 @@ void app_main(void)
     ESP_LOGI(TAG, "CubeSat imager — built for SC850SL (flight target)");
 #elif defined(CONFIG_CAMERA_TARGET_SC202CS_TAB5)
     ESP_LOGI(TAG, "CubeSat imager — built for SC202CS on M5Stack Tab5");
+#elif defined(CONFIG_CAMERA_TARGET_MI1602_TEST)
+    ESP_LOGI(TAG, "CubeSat imager — MI1602 thermal-only bring-up (debug)");
 #else
 #error "No CAMERA_TARGET selected. Run idf.py menuconfig."
 #endif

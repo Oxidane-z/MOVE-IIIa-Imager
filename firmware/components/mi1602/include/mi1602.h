@@ -178,6 +178,30 @@ esp_err_t mi1602_capture_single(mi1602_handle_t h,
                                 uint16_t *out_pixels,
                                 mi1602_frame_header_t *out_hdr);
 
+/* Debug / bring-up: clock n raw bytes off MISO with CS_N asserted for the whole
+ * transfer. NO I2C, NO FRAME_MODE trigger, NO DATA_READY wait, NO byte-swap --
+ * just whatever the MI48 happens to be putting on the SPI bus. Use it to see if
+ * the sensor is streaming frame data independent of the I2C control handshake
+ * (e.g. still SXIF_ERROR / BOOTING_UP on I2C but pixels flowing on SPI). n is
+ * clamped to the driver's internal scratch size (>= one full frame). */
+esp_err_t mi1602_spi_read_raw(mi1602_handle_t h, uint8_t *buf, size_t n);
+
+/* Capture a frame WITHOUT the I2C FRAME_MODE trigger: wait for DATA_READY
+ * (GPIO if wired, else STATUS poll), then read the frame off SPI and parse the
+ * header. For a module that already has a frame pending (DATA_READY asserted)
+ * while its I2C control writes are NACKing (stuck boot). Same outputs as
+ * mi1602_capture_single. */
+esp_err_t mi1602_capture_no_trigger(mi1602_handle_t h, uint16_t *out_pixels,
+                                    mi1602_frame_header_t *out_hdr);
+
+/* Read a frame off SPI RIGHT NOW: no FRAME_MODE trigger AND no DATA_READY wait.
+ * For a module already free-running on SPI (continuous stream) while its
+ * DATA_READY line / boot handshake is unavailable. The frame may be torn if the
+ * read isn't aligned to a frame boundary, so always check out_hdr->crc_ok and
+ * frame_counter. */
+esp_err_t mi1602_read_frame_now(mi1602_handle_t h, uint16_t *out_pixels,
+                                mi1602_frame_header_t *out_hdr);
+
 /* Streaming: spawns a background task that delivers frames via cb.
  * cb runs on the streaming task, NOT in ISR context, so it may block. */
 typedef void (*mi1602_frame_cb_t)(const uint16_t *pixels,
