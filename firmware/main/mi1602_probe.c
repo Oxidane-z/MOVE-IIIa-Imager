@@ -34,29 +34,25 @@ static mi1602_handle_t g_mi1602 = NULL;
  * so there's no extra MI1602 traffic when nobody is viewing the thermal preview. */
 static volatile float s_aux_temp_c = -300.0f;
 
-/* Board glue: the carrier routes the MI48 MODE strap to a GPIO. MODE
- * must be LOW (GND) to select the I²C-control + SPI-data host interface.
+/* Board glue. Two MI48 straps matter, both handled in hardware:
  *
- * IMPORTANT CAVEAT: the MI48 samples MODE at its OWN power-on reset
- * (t≈0, when the rail comes up). Our firmware can't drive GPIO10 until
- * app_main runs (~1.2 s later) — far too late. If MODE is left to the
- * ESP GPIO (high-Z during ESP boot), the module latches an undefined /
- * wrong mode at power-on and then drives the SDA/SCL pins, which shows
- * up as the I²C bus being HELD LOW (every address times out, as we see).
- * Driving GPIO10 low afterwards does NOT re-latch the mode — the MI48
- * needs a reset for that, and we have no RESET line wired (rst=-1).
+ *  - MODE must be LOW to select the I²C-control + SPI-data host interface.
+ *    Tied to GND on the carrier (hardware pull-down). The MI48 samples MODE at
+ *    its OWN power-on reset, long before app_main runs, so a firmware GPIO
+ *    drive can never set it in time — hence the HW pull-down. The software
+ *    drive below is left DISABLED (-1); GPIO10 is a DataReady pin now anyway.
  *
- * => MODE needs a HARDWARE pull-down to GND so it's already low when the
- *    module powers up. The firmware drive below is then just redundant
- *    insurance. Alternatively, wire the MI48 RESET_N to a GPIO and set
- *    CONFIG_MI1602_RESET_GPIO so we can: drive MODE low → pulse reset →
- *    module re-latches the correct mode.
- *
- * GPIO10 is now wired as DataReady (DRDY), so the software MODE drive is
- * DISABLED (-1) — driving it would fight the MI48's DRDY output. MODE must be a
- * hardware pull-down to GND (which the caveat above requires regardless). */
-#define MI1602_MODE_GPIO    (-1)   /* was 10; that pin is now DataReady */
-#define MI1602_MODE_LEVEL   0      /* LOW = I²C + SPI mode (set via HW pull-down) */
+ *  - RESET_N is UNWIRED (CONFIG_MI1602_RESET_GPIO=-1), so the MI48 only ever
+ *    gets a bare power-on reset, and it is marginal. This — NOT MODE — was the
+ *    real bring-up blocker. A dirty power-up mis-latches the ADDR strap (the
+ *    chip answers at 0x40 instead of the strapped-high 0x41) and sticks in
+ *    BOOTING_UP+SXIF_ERROR while holding the I²C bus low (every address times
+ *    out). The cure is a full-board POWER CYCLE; a P4-only reset is not enough.
+ *    A clean POR brings it up at 0x41, STATUS=0x00, streaming valid frames
+ *    (verified: 111/111 crc=OK). Wiring RESET_N to a GPIO so firmware can pulse
+ *    it is the proper fix. */
+#define MI1602_MODE_GPIO    (-1)   /* HW pull-down to GND; GPIO10 is DataReady */
+#define MI1602_MODE_LEVEL   0      /* LOW = I²C + SPI mode */
 
 void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
 {
@@ -103,24 +99,26 @@ void mi1602_try_probe(i2c_master_bus_handle_t shared_bus)
         /* Diagnostic scan of the MI1602 bus — tells us whether the module
          * ACKs at all (and at which address: 0x40 vs 0x41 ADDR strap). */
         i2c_master_bus_reset(bus);
-        ESP_LOGI(TAG, "MI1602 I²C scan (port %d, expect 0x40 or 0x41):",
+        /* Only 0x40 / 0x41 are possible (the MI48 ADDR strap), so probe just
+         * those two instead of sweeping the whole bus (the old 0x08..0x77 sweep
+         * cost ~5.6 s at boot). Try 0x41 first (the strapped-high address on a
+         * clean POR); fall back to 0x40 (what a dirty POR mis-latches to).
+         * Latch whichever actually ACKs so we init the driver on it. */
+        ESP_LOGI(TAG, "MI1602 I²C scan (port %d, expect 0x41, else 0x40):",
                  CONFIG_MI1602_I2C_PORT);
         int found = 0;
-        for (uint8_t a = 0x08; a < 0x78; ++a) {
-            if (i2c_master_probe(bus, a, 50) == ESP_OK) {
-                ESP_LOGI(TAG, "  device found at 0x%02x", a);
+        const uint8_t cand[2] = { MI1602_I2C_ADDR_ALT, MI1602_I2C_ADDR_DEFAULT };
+        for (int i = 0; i < 2; ++i) {
+            if (i2c_master_probe(bus, cand[i], 50) == ESP_OK) {
+                ESP_LOGI(TAG, "  device found at 0x%02x", cand[i]);
+                if (!detected_addr) detected_addr = cand[i];
                 ++found;
-                /* The MI48 ADDR strap selects 0x40 or 0x41; on this carrier it
-                 * floats and flips across power-ons. Latch whichever address
-                 * the module actually answers on, so we don't probe the wrong
-                 * one (that took the IR pane offline when it landed on 0x40). */
-                if (a == MI1602_I2C_ADDR_DEFAULT || a == MI1602_I2C_ADDR_ALT)
-                    detected_addr = a;
             }
         }
         if (!found) {
-            ESP_LOGW(TAG, "  no devices ACK'd on MI1602 bus — check pull-ups,"
-                     " power, MODE strap timing, SDA/SCL swap");
+            ESP_LOGW(TAG, "  no ACK at 0x40/0x41 — power-cycle the whole board "
+                     "(MI48 needs a clean POR; RESET_N is unwired), then check "
+                     "pull-ups / SDA-SCL wiring");
         }
     } else {
         ESP_LOGI(TAG, "MI1602 aux probe (shared bus from BSP)");

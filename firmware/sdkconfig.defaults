@@ -53,11 +53,16 @@ CONFIG_SC850SL_I2C_FREQ_HZ=100000
 # MI1602 pins no longer collide with the SC850SL (which owns GPIO 9/11/54)
 # or PCM5102A (20-23). Current wiring:
 #   I²C (port 1): SDA = GPIO 12, SCL = GPIO 15
-#   DataReady   : GPIO 10  (active-high frame-ready input)
-#   MODE strap  : hardware pull-down to GND (was driven on GPIO 10, but that pin
-#                 is now DataReady — and the software drive was never effective
-#                 anyway since the MI48 latches MODE at its own power-on; see
-#                 mi1602_probe.c)
+#   DataReady   : GPIO 10 exists but is UNUSED by firmware — we poll the MI48
+#                 STATUS register instead (DATA_READY_GPIO=-1 below). The
+#                 STATUS-poll path is the one verified to deliver clean frames
+#                 (111/111 crc=OK on the MI1602_TEST build); GPIO 10 as a DRDY
+#                 input was never confirmed to actually work on this carrier.
+#   MODE strap  : hardware pull-down to GND (correct — MODE was never the problem)
+#   RESET_N     : UNWIRED (rst=-1). The MI48 only gets a bare power-on reset, so
+#                 the whole board must be power-cycled to bring the thermal cam
+#                 up cleanly (a P4-only reset leaves it stale). Wiring RESET_N to
+#                 a GPIO is the proper fix. See mi1602-reset-n memory / commit.
 #   SPI         : SCLK 28 / MISO 29 / MOSI 30 / CS 31  (SPI2_HOST)
 # I²C is on port 1 so it's fully independent of the SC850SL's port-0 bus.
 CONFIG_MI1602_ENABLED=y
@@ -69,18 +74,22 @@ CONFIG_MI1602_I2C_FREQ_HZ=100000
 # device at 0x41, not the 0x40 default).
 CONFIG_MI1602_I2C_ADDR_HIGH=y
 CONFIG_MI1602_SPI_HOST=2
-# MI48 frame read is a manual-CS chunked SPI transfer across the flex. 15.6 MHz
-# decoded a usable image, but the per-frame CRC kept mismatching and the FPA
-# background was speckled — classic byte-level read glitches at too high a clock
-# over a flex. Halved to 7.8 MHz: ~38 ms for a 38 KB frame (fine for the ~1 fps
-# thermal preview) for a cleaner, CRC-valid read. Raise only if frames stay clean.
+# MI48 frame read is a manual-CS chunked SPI transfer across the flex. The
+# per-frame CRC mismatches once chased here were actually a CRC byte-order bug
+# (the MI48 feeds CCITT-FALSE LSB-first) — now fixed in mi1602_crc.c, and the
+# MI1602_TEST build reads 111/111 crc=OK at 7.8 MHz. Kept at 7.8 MHz as a
+# conservative clean default over the flex (~38 ms for a 38 KB frame, fine for
+# the ~1 fps thermal preview); can try raising now that the CRC is correct.
 CONFIG_MI1602_SPI_FREQ_HZ=7800000
 CONFIG_MI1602_SPI_SCLK_GPIO=28
 CONFIG_MI1602_SPI_MISO_GPIO=29
 CONFIG_MI1602_SPI_MOSI_GPIO=30
 CONFIG_MI1602_SPI_CS_GPIO=31
 CONFIG_MI1602_RESET_GPIO=-1
-CONFIG_MI1602_DATA_READY_GPIO=10
+# -1 = poll the MI48 STATUS register for DATA_READY over I2C. This is the path
+# verified to deliver clean frames (see the DataReady note above); do not set
+# this to 10 until the GPIO-10 DRDY input is confirmed working on the carrier.
+CONFIG_MI1602_DATA_READY_GPIO=-1
 CONFIG_MI1602_SYSCLK_GPIO=-1
 
 # ---- CPU & FreeRTOS --------------------------------------------------------
