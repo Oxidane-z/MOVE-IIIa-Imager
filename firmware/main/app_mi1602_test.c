@@ -3,12 +3,7 @@
  *
  * Selected by CONFIG_CAMERA_TARGET_MI1602_TEST. Brings up ONLY the MI1602.
  *
- * History: the MI48 would never finish booting until RESET_N was wired.  The
- * carrier left RESET_N (active-low) floating, so the MI48 sat held in reset ->
- * silent I2C (probe timeouts) or, on a marginal power-on, a mis-latched ADDR
- * strap (answering at 0x40 instead of the strapped-high 0x41) stuck in
- * BOOTING_UP + SXIF_ERROR.  With RESET_N tied to 3V3 the chip boots cleanly:
- * ACK at 0x41, STATUS=0x00.  See datasheet MI48D5 Table 27 (ADDR high -> 0x41).
+
  *
  * This build: detect the I2C address, bring the driver up, then trigger
  * single-frame captures over SPI and print the thermal stats.
@@ -26,7 +21,7 @@ static const char *TAG = "mi1602_cap";
 
 void app_run(void)
 {
-    ESP_LOGI(TAG, "=== MI1602 capture test (RESET_N must be tied to 3V3) ===");
+    ESP_LOGI(TAG, "=== MI1602 capture test ===");
     ESP_LOGI(TAG, "I2C port=%d SDA=%d SCL=%d",
              CONFIG_MI1602_I2C_PORT, CONFIG_MI1602_I2C_SDA_GPIO, CONFIG_MI1602_I2C_SCL_GPIO);
 
